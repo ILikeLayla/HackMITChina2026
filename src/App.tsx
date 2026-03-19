@@ -339,6 +339,96 @@ function MainCalendar() {
         }
     }, [viewMode]);
 
+    useEffect(() => {
+        const selectors = '.days, .day-view-tasks';
+        const scrollElements = Array.from(document.querySelectorAll<HTMLElement>(selectors));
+        if (scrollElements.length === 0) {
+            return;
+        }
+
+        const cleanups: Array<() => void> = [];
+
+        scrollElements.forEach((element) => {
+            const isDayViewTasks = element.classList.contains('day-view-tasks');
+            const indicatorHost = isDayViewTasks
+                ? element.closest<HTMLElement>('.day-view')
+                : element.parentElement;
+            if (!indicatorHost) {
+                return;
+            }
+
+            const updateIndicator = () => {
+                const maxScroll = element.scrollHeight - element.clientHeight;
+                let trackTopPx = 4;
+                let trackBottomPx = 4;
+
+                if (isDayViewTasks) {
+                    const hostRect = indicatorHost.getBoundingClientRect();
+                    const elementRect = element.getBoundingClientRect();
+                    const dayTasksTop = elementRect.top - hostRect.top;
+                    const dayTasksBottom = dayTasksTop + element.clientHeight;
+                    trackTopPx = dayTasksTop + 4;
+                    trackBottomPx = Math.max(4, indicatorHost.clientHeight - dayTasksBottom + 4);
+                }
+
+                const trackLength = Math.max(0, indicatorHost.clientHeight - trackTopPx - trackBottomPx);
+                indicatorHost.style.setProperty('--scroll-indicator-track-top', `${trackTopPx}px`);
+                indicatorHost.style.setProperty('--scroll-indicator-track-bottom', `${trackBottomPx}px`);
+
+                if (maxScroll <= 1 || trackLength <= 0) {
+                    indicatorHost.style.setProperty('--scroll-indicator-opacity', '0');
+                    indicatorHost.style.setProperty('--scroll-indicator-size', '0px');
+                    indicatorHost.style.setProperty('--scroll-indicator-offset', `${trackTopPx}px`);
+                    return;
+                }
+
+                const minThumbSize = 22;
+                const rawThumbSize = (element.clientHeight / element.scrollHeight) * trackLength;
+                const thumbSize = Math.min(trackLength, Math.max(minThumbSize, rawThumbSize));
+                const maxThumbTravel = Math.max(0, trackLength - thumbSize);
+                const clampedScrollTop = Math.min(maxScroll, Math.max(0, element.scrollTop));
+                const scrollProgress = maxScroll > 0 ? clampedScrollTop / maxScroll : 0;
+                const clampedProgress = Math.min(1, Math.max(0, scrollProgress));
+                const thumbTravel = Math.min(maxThumbTravel, Math.max(0, maxThumbTravel * clampedProgress));
+                const thumbOffset = trackTopPx + thumbTravel;
+
+                indicatorHost.style.setProperty('--scroll-indicator-opacity', '1');
+                indicatorHost.style.setProperty('--scroll-indicator-size', `${thumbSize}px`);
+                indicatorHost.style.setProperty('--scroll-indicator-offset', `${thumbOffset}px`);
+            };
+
+            const handleScroll = () => {
+                updateIndicator();
+            };
+
+            indicatorHost.classList.add('has-custom-scroll-indicator');
+            element.addEventListener('scroll', handleScroll, { passive: true });
+
+            const resizeObserver = new ResizeObserver(() => {
+                updateIndicator();
+            });
+            resizeObserver.observe(element);
+            resizeObserver.observe(indicatorHost);
+
+            updateIndicator();
+
+            cleanups.push(() => {
+                element.removeEventListener('scroll', handleScroll);
+                resizeObserver.disconnect();
+                indicatorHost.classList.remove('has-custom-scroll-indicator');
+                indicatorHost.style.removeProperty('--scroll-indicator-opacity');
+                indicatorHost.style.removeProperty('--scroll-indicator-size');
+                indicatorHost.style.removeProperty('--scroll-indicator-offset');
+                indicatorHost.style.removeProperty('--scroll-indicator-track-top');
+                indicatorHost.style.removeProperty('--scroll-indicator-track-bottom');
+            });
+        });
+
+        return () => {
+            cleanups.forEach(cleanup => cleanup());
+        };
+    }, [viewMode, dateTransition, viewTransition, tasks, filterType, filterKeyword, searchScope]);
+
     const openTaskModal = (task: CalendarTask) => {
         clearTaskModalCloseTimer();
         setIsTaskModalClosing(false);

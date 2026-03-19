@@ -42,42 +42,44 @@ export function generateWeekViewDOM({
     handleDayClick,
 }: WeekViewProps) {
     return (
-        <div className="calendar-grid">
+        <div className="calendar-grid week-view-grid">
             <div className="weekdays">
                 {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
                     <div key={day} className="weekday">{day}</div>
                 ))}
             </div>
-            <div className="days">
-                <div className="days-a-week">
-                    {weekDays.map((day, index) => {
-                        const dayTasks = getTasksForDay(day);
-                        return (
-                            <div
-                                key={index}
-                                className={`day ${day.isToday ? 'today' : ''}`}
-                                onClick={() => handleDayClick(day)}
-                            >
-                                <div className="day-number">{day.day}</div>
-                                <div className="tasks">
-                                    {dayTasks.map(task => (
-                                        <div
-                                            key={task.id}
-                                            className={`task clickable-task ${task.type}`}
-                                            style={getTaskStyle(task.type)}
-                                            title={`${task.title} ${task.time}`}
-                                            onClick={(event) => {
-                                                event.stopPropagation();
-                                                openTaskModal(task);
-                                            }}
-                                        >
-                                            <p className="task-time">{task.time}</p><div className="task-divider" aria-hidden="true"></div>{task.title}
-                                        </div>
-                                    ))}
+            <div className="days-scroll-shell">
+                <div className="days">
+                    <div className="days-a-week">
+                        {weekDays.map((day, index) => {
+                            const dayTasks = getTasksForDay(day);
+                            return (
+                                <div
+                                    key={index}
+                                    className={`day ${day.isToday ? 'today' : ''}`}
+                                    onClick={() => handleDayClick(day)}
+                                >
+                                    <div className="day-number">{day.day}</div>
+                                    <div className="tasks">
+                                        {dayTasks.map(task => (
+                                            <div
+                                                key={task.id}
+                                                className={`task clickable-task ${task.type}`}
+                                                style={getTaskStyle(task.type)}
+                                                title={`${task.title} ${task.time}`}
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    openTaskModal(task);
+                                                }}
+                                            >
+                                                <p className="task-time">{task.time}</p><div className="task-divider" aria-hidden="true"></div>{task.title}
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
-                            </div>
-                        );
-                    })}
+                            );
+                        })}
+                    </div>
                 </div>
             </div>
         </div>
@@ -112,22 +114,24 @@ export function generateDayViewDOM({
                     year: 'numeric',
                 })}
             </div>
-            <div className="day-view-tasks">
-                {dayTasks.length > 0 ? (
-                    dayTasks.map(task => (
-                        <div
-                            key={task.id}
-                            className={`day-view-task task clickable-task ${task.type}`}
-                            style={getTaskStyle(task.type)}
-                            onClick={() => openTaskModal(task)}
-                        >
-                            <div className="day-view-task-main">{task.time}<div className="task-divider" aria-hidden="true"></div>{task.title}</div>
-                            <div className="day-view-task-note">{task.note || 'No note'}</div>
-                        </div>
-                    ))
-                ) : (
-                    <div className="day-view-empty">No tasks scheduled</div>
-                )}
+            <div className="day-view-tasks-shell">
+                <div className="day-view-tasks">
+                    {dayTasks.length > 0 ? (
+                        dayTasks.map(task => (
+                            <div
+                                key={task.id}
+                                className={`day-view-task task clickable-task ${task.type}`}
+                                style={getTaskStyle(task.type)}
+                                onClick={() => openTaskModal(task)}
+                            >
+                                <div className="day-view-task-main">{task.time}<div className="task-divider" aria-hidden="true"></div>{task.title}</div>
+                                <div className="day-view-task-note">{task.note || 'No note'}</div>
+                            </div>
+                        ))
+                    ) : (
+                        <div className="day-view-empty">No tasks scheduled</div>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -202,55 +206,57 @@ export function generateMonthViewDOM({
     handleDayClick,
 }: MonthViewProps) {
     return (
-        <div className="calendar-grid">
+        <div className="calendar-grid month-view-grid">
             <div className="weekdays">
                 {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
                     <div key={day} className="weekday">{day}</div>
                 ))}
             </div>
-            <div className="days">
-            {
-                calendarDays.reduce((weeks: CalendarDay[][], day, index) => {
-                    if (index % 7 === 0) {
-                        weeks.push([day]);
-                    } else {
-                        weeks[weeks.length - 1].push(day);
-                    }
-                    return weeks;
-                }, []).map((week, index) => (
-                    <div key={index} className="days-a-week">
-                        {week.map((day, index) => {
-                            const dayTasks = getTasksForDay(day);
-                            return (
-                                <div
-                                    key={index}
-                                    className={`day ${day.isOtherMonth ? 'other-month' : ''} ${day.isToday ? 'today' : ''}`}
-                                    onClick={() => handleDayClick(day)}
-                                >
-                                    <div className="day-number">{day.day}</div>
-                                    <div className="tasks">
-                                        {dayTasks.map(task => (
-                                            <div
-                                                key={task.id}
-                                                className={`task clickable-task ${task.type}`}
-                                                style={getTaskStyle(task.type)}
-                                                title={`${task.title} ${task.time}`}
-                                                onClick={(event) => {
-                                                    event.stopPropagation();
-                                                    openTaskModal(task);
-                                                }}
-                                            >
-                                                <p className="task-time">{task.time}</p><div className="task-divider" aria-hidden="true"></div>{task.title}
-                                            </div>
-                                        ))}
+            <div className="days-scroll-shell">
+                <div className="days">
+                {
+                    calendarDays.reduce((weeks: CalendarDay[][], day, index) => {
+                        if (index % 7 === 0) {
+                            weeks.push([day]);
+                        } else {
+                            weeks[weeks.length - 1].push(day);
+                        }
+                        return weeks;
+                    }, []).map((week, index) => (
+                        <div key={index} className="days-a-week">
+                            {week.map((day, index) => {
+                                const dayTasks = getTasksForDay(day);
+                                return (
+                                    <div
+                                        key={index}
+                                        className={`day ${day.isOtherMonth ? 'other-month' : ''} ${day.isToday ? 'today' : ''}`}
+                                        onClick={() => handleDayClick(day)}
+                                    >
+                                        <div className="day-number">{day.day}</div>
+                                        <div className="tasks">
+                                            {dayTasks.map(task => (
+                                                <div
+                                                    key={task.id}
+                                                    className={`task clickable-task ${task.type}`}
+                                                    style={getTaskStyle(task.type)}
+                                                    title={`${task.title} ${task.time}`}
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
+                                                        openTaskModal(task);
+                                                    }}
+                                                >
+                                                    <p className="task-time">{task.time}</p><div className="task-divider" aria-hidden="true"></div>{task.title}
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
-                                </div>
-                            );
-                        })
-                    }
-                </div>)
-                )
-            }
+                                );
+                            })
+                        }
+                    </div>)
+                    )
+                }
+                </div>
             </div>
         </div>
     );

@@ -25,6 +25,36 @@ body {
   overflow: hidden;
 }
 
+/* Use overlay-style scrollbars with hidden tracks project-wide. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(70, 70, 70, 0.5) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(70, 70, 70, 0.5);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(70, 70, 70, 0.72);
+}
+
 .calendar-container {
   top: 0;
   margin: 0px auto;
@@ -37,12 +67,13 @@ body {
   min-height: 0;
   box-sizing: border-box;
   transition: max-width 280ms cubic-bezier(0.22, 0.61, 0.36, 1),
-    padding 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  padding 280ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .calendar-container.list-scroll-mode {
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: none;
 }
 
 .calendar-header {
@@ -196,11 +227,13 @@ body {
   gap: 4px;
 }
 
-.header-tools-group.headertools-group-label label {
-  text-align: center;
-  font-size: 7px;
-  font-weight: 700;
+.header-tools-group-label label {
+  padding-left: 5px;
   color: #555;
+}
+
+.header-tools-group-label label:first-child {
+  padding-left: 8px;
 }
 
 .header-tools-group select,
@@ -280,8 +313,7 @@ body {
 
 .calendar-transition-viewport {
   position: relative;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   flex: 1;
   display: flex;
   flex-direction: column; 
@@ -332,12 +364,14 @@ body {
   flex: 1;
   display: flex;
   inset: 0;
+  min-height: 0;
 }
 
 .calendar-transition-track {
   flex: 1;
   display: flex;
   width: 200%;
+  min-height: 0;
 }
 
 .calendar-transition-track.animating {
@@ -359,6 +393,7 @@ body {
   display: flex;
   width: 50%;
   min-width: 50%;
+  min-height: 0;
 }
 
 @keyframes slide-forward {
@@ -439,14 +474,19 @@ body {
 
 .weekdays {
   position: sticky;
-  top: 0;
+  top: 0px;
   z-index: 10;
   flex: 0 0 auto;
   display: flex;
   border-bottom: 1px solid #e0e0e0;
   gap: 1px;
-  background: #ffffff;
   overflow: hidden;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+  background: rgba(246, 246, 246, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
 }
 
 .weekday {
@@ -466,14 +506,42 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  width: 98%;
+  align-self: center;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+  scrollbar-width: none;
   /* border: 1px solid #e0e0e0; */
 }
 
-.days-a-week {
+.days-scroll-shell {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.days::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.days-a-week {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: row;
   gap: 1px;
+}
+
+.month-view-grid .days-a-week {
+  flex: 1 1 0;
+}
+
+.week-view-grid .day {
+  overflow: visible;
 }
 
 .day {
@@ -581,14 +649,28 @@ body {
 
 .day-view {
   flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  position: relative;
   background: white;
   padding: 16px;
+  padding-bottom: 0px;
 }
 
 .day-view-date {
   font-size: 20px;
   font-weight: 600;
-  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border-bottom-left-radius: 0px;
+  border-bottom-right-radius: 0px;
+  background: rgba(246, 246, 246, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
 }
 
 .day-view-date.today {
@@ -596,15 +678,76 @@ body {
 }
 
 .day-view-tasks {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: none;
+  scrollbar-width: none;
+}
+
+.day-view-tasks-shell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.day-view-tasks::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.has-custom-scroll-indicator::before {
+  content: "";
+  position: absolute;
+  top: var(--scroll-indicator-track-top, 4px);
+  right: 2px;
+  bottom: var(--scroll-indicator-track-bottom, 4px);
+  width: 5px;
+  border-radius: 999px;
+  background: rgba(57, 107, 216, 0.22);
+  opacity: 1;
+  z-index: 3;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.has-custom-scroll-indicator::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  top: var(--scroll-indicator-offset, 4px);
+  width: 5px;
+  height: var(--scroll-indicator-size, 0px);
+  border-radius: 999px;
+  background: rgba(52, 88, 180, 0.82);
+  opacity: var(--scroll-indicator-opacity, 0);
+  z-index: 4;
+  pointer-events: none;
+  transition: opacity 220ms ease, top 120ms linear, height 120ms linear;
 }
 
 .day-view-task {
   font-size: 14px;
+  width: 97%;
+  align-self: center;
   padding: 8px 10px;
   white-space: normal;
+  min-height: 52px;
+}
+
+.day-view-task:first-child {
+  margin-top: 12px;
+}
+
+.day-view-task:last-child {
+  margin-bottom: 12px;
 }
 
 .day-view-task-main {
@@ -617,6 +760,7 @@ body {
 }
 
 .day-view-empty {
+  padding-top: 12px;
   color: #666;
   font-size: 14px;
 }
@@ -627,6 +771,7 @@ body {
   flex-direction: column;
   gap: 12px;
   padding: 10px;
+  overscroll-behavior: none;
 }
 
 .calendar-container.list-scroll-mode .list-view {
@@ -1056,7 +1201,7 @@ body {
   }
 }
 
-@media (max-width: 825px) {
+@media (max-width: 795px) {
   .calendar-container {
     padding: 10px;
     animation: responsive-layout-shift 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -1123,6 +1268,7 @@ body {
   }
 
   .header-tools-group-label label {
+    padding-left: 0px;
     font-weight: 100;
   }
 
