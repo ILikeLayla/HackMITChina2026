@@ -147,10 +147,20 @@ export function generateListViewDOM({
                 listTaskGroups.map(([key, dayTasks]) => {
                     const [year, month, day] = key.split('-').map(Number);
                     const cardDate = new Date(year, month, day);
+                    const now = new Date();
+                    const myDay = {
+                        day: cardDate.getDate(),
+                        month: cardDate.getMonth(),
+                        year: cardDate.getFullYear(),
+                        isToday:
+                            cardDate.getDate() === now.getDate() &&
+                            cardDate.getMonth() === now.getMonth() &&
+                            cardDate.getFullYear() === now.getFullYear(),
+                    };
                     return (
                         <div
                             key={key}
-                            className="list-card"
+                            className={`list-card ${myDay.isToday ? 'today' : ''}`}
                             ref={key === firstUpcomingKey ? listScrollTargetRef : null}
                         >
                             <div className="list-card-date">

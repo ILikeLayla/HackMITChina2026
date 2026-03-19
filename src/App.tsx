@@ -53,6 +53,8 @@ async function get_events() {
     console.log(await invoke('get_events'));
 }
 
+const MODAL_CLOSE_ANIMATION_MS = 180;
+
 function MainCalendar() {
     const [currentDate, setCurrentDate] = useState(new Date());
     const [viewMode, setViewMode] = useState<ViewMode>('month');
@@ -65,6 +67,8 @@ function MainCalendar() {
     const [isCreatingTask, setIsCreatingTask] = useState(false);
     const [creatingTaskDate, setCreatingTaskDate] = useState(new Date());
     const [isTypeModalOpen, setIsTypeModalOpen] = useState(false);
+    const [isTaskModalClosing, setIsTaskModalClosing] = useState(false);
+    const [isTypeModalClosing, setIsTypeModalClosing] = useState(false);
     const [typeModalMode, setTypeModalMode] = useState<'create' | 'edit'>('create');
     const [typeEditingOriginalName, setTypeEditingOriginalName] = useState<string | null>(null);
     const [typeDraftName, setTypeDraftName] = useState('');
@@ -78,6 +82,8 @@ function MainCalendar() {
     const listScrollTargetRef = useRef<HTMLDivElement | null>(null);
     const dateTransitionTimerRef = useRef<number | null>(null);
     const viewTransitionTimerRef = useRef<number | null>(null);
+    const taskModalCloseTimerRef = useRef<number | null>(null);
+    const typeModalCloseTimerRef = useRef<number | null>(null);
     const filtersButtonMeasureRef = useRef<HTMLSpanElement | null>(null);
 
     const selectedTask = tasks.find(task => task.id === selectedTaskId) ?? null;
@@ -99,6 +105,20 @@ function MainCalendar() {
         }
 
         setViewTransition(null);
+    };
+
+    const clearTaskModalCloseTimer = () => {
+        if (taskModalCloseTimerRef.current !== null) {
+            window.clearTimeout(taskModalCloseTimerRef.current);
+            taskModalCloseTimerRef.current = null;
+        }
+    };
+
+    const clearTypeModalCloseTimer = () => {
+        if (typeModalCloseTimerRef.current !== null) {
+            window.clearTimeout(typeModalCloseTimerRef.current);
+            typeModalCloseTimerRef.current = null;
+        }
     };
 
     const startDateTransition = (targetDate: Date, direction: DateTransitionDirection) => {
@@ -195,6 +215,8 @@ function MainCalendar() {
             }
 
             cancelViewTransition();
+            clearTaskModalCloseTimer();
+            clearTypeModalCloseTimer();
         };
     }, []);
 
@@ -281,6 +303,8 @@ function MainCalendar() {
     }, [viewMode]);
 
     const openTaskModal = (task: CalendarTask) => {
+        clearTaskModalCloseTimer();
+        setIsTaskModalClosing(false);
         setIsCreatingTask(false);
         setSelectedTaskId(task.id);
         setModalDraft({
@@ -292,6 +316,8 @@ function MainCalendar() {
     };
 
     const openCreateTaskModal = (date: Date) => {
+        clearTaskModalCloseTimer();
+        setIsTaskModalClosing(false);
         const defaultType = taskTypes[0] ?? 'work';
         setIsCreatingTask(true);
         setSelectedTaskId(null);
@@ -305,18 +331,55 @@ function MainCalendar() {
         });
     };
 
-    const closeTaskModal = () => {
-        setSelectedTaskId(null);
-        setIsCreatingTask(false);
-        setModalDraft(null);
-        setIsTypeModalOpen(false);
+    const resetTypeModalState = () => {
         setTypeModalMode('create');
         setTypeEditingOriginalName(null);
         setTypeDraftName('');
         setTypeDraftColor('#4f7ef7');
     };
 
+    const closeTypeModal = () => {
+        if (!isTypeModalOpen || isTypeModalClosing) {
+            return;
+        }
+
+        setIsTypeModalClosing(true);
+        clearTypeModalCloseTimer();
+        typeModalCloseTimerRef.current = window.setTimeout(() => {
+            setIsTypeModalOpen(false);
+            setIsTypeModalClosing(false);
+            resetTypeModalState();
+            typeModalCloseTimerRef.current = null;
+        }, MODAL_CLOSE_ANIMATION_MS);
+    };
+
+    const closeTaskModal = () => {
+        if (!modalDraft || isTaskModalClosing) {
+            return;
+        }
+
+        if (isTypeModalOpen) {
+            closeTypeModal();
+        }
+
+        setIsTaskModalClosing(true);
+        clearTaskModalCloseTimer();
+        taskModalCloseTimerRef.current = window.setTimeout(() => {
+            clearTypeModalCloseTimer();
+            setSelectedTaskId(null);
+            setIsCreatingTask(false);
+            setModalDraft(null);
+            setIsTaskModalClosing(false);
+            setIsTypeModalOpen(false);
+            setIsTypeModalClosing(false);
+            resetTypeModalState();
+            taskModalCloseTimerRef.current = null;
+        }, MODAL_CLOSE_ANIMATION_MS);
+    };
+
     const openTypeCreateModal = () => {
+        clearTypeModalCloseTimer();
+        setIsTypeModalClosing(false);
         setTypeModalMode('create');
         setTypeEditingOriginalName(null);
         setTypeDraftName('');
@@ -328,6 +391,9 @@ function MainCalendar() {
         if (!modalDraft?.type) {
             return;
         }
+
+        clearTypeModalCloseTimer();
+        setIsTypeModalClosing(false);
         const currentType = modalDraft.type;
         setTypeModalMode('edit');
         setTypeEditingOriginalName(currentType);
@@ -369,10 +435,7 @@ function MainCalendar() {
                 setFilterType(normalized);
             }
 
-            setIsTypeModalOpen(false);
-            setTypeModalMode('create');
-            setTypeEditingOriginalName(null);
-            setTypeDraftName('');
+            closeTypeModal();
             return;
         }
 
@@ -389,10 +452,7 @@ function MainCalendar() {
             setModalDraft(prev => prev ? { ...prev, type: normalized } : prev);
         }
 
-        setIsTypeModalOpen(false);
-        setTypeModalMode('create');
-        setTypeEditingOriginalName(null);
-        setTypeDraftName('');
+        closeTypeModal();
     };
 
     const deleteTypeAndMoveToOther = () => {
@@ -432,11 +492,7 @@ function MainCalendar() {
             setFilterType(OTHER_TYPE);
         }
 
-        setIsTypeModalOpen(false);
-        setTypeModalMode('create');
-        setTypeEditingOriginalName(null);
-        setTypeDraftName('');
-        setTypeDraftColor('#4f7ef7');
+        closeTypeModal();
     };
 
     const getTaskStyle = (type: string) => {
@@ -503,7 +559,7 @@ function MainCalendar() {
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
 
     return (
-        <main className="calendar-container">
+        <main className={`calendar-container ${viewMode === 'list' ? 'list-scroll-mode' : ''}`}>
             <div className="calendar-header sticky-header">
                 <div className="header-top-row">
                     <div className="calendar-nav">
@@ -550,30 +606,31 @@ function MainCalendar() {
                 <div className={`header-tools-collapsible ${isHeaderToolsOpen ? 'open' : ''}`}>
                     <div className="header-tools">
                         <div className="header-tools-group">
-                            <label>Type</label>
-                            <select value={filterType} onChange={(event) => setFilterType(event.target.value)}>
-                                <option value="all">all</option>
+                            <div className="header-tools-group-label"><label htmlFor="filterType">TYPE</label></div>
+                            <select id="filterType" value={filterType} onChange={(event) => setFilterType(event.target.value)}>
+                                <option value="all">All</option>
                                 {taskTypes.map(type => (
                                     <option key={type} value={type}>{type}</option>
                                 ))}
                             </select>
                         </div>
                         <div className="header-tools-group">
-                            <label>Search</label>
+                            <div className="header-tools-group-label"><label htmlFor="filterKeyword">SEARCH</label></div>
                             <input
+                                id="filterKeyword"
                                 value={filterKeyword}
                                 onChange={(event) => setFilterKeyword(event.target.value)}
-                                placeholder="keyword"
+                                placeholder=""
                             />
                         </div>
                         <div className="header-tools-group">
-                            <label>Scope</label>
-                            <select value={searchScope} onChange={(event) => setSearchScope(event.target.value as typeof searchScope)}>
-                                <option value="all">all fields</option>
-                                <option value="title">title</option>
-                                <option value="note">note</option>
-                                <option value="time">time</option>
-                                <option value="type">type</option>
+                            <div className="header-tools-group-label"><label htmlFor="searchScope">SCOPE</label></div>
+                            <select id="searchScope" value={searchScope} onChange={(event) => setSearchScope(event.target.value as typeof searchScope)}>
+                                <option value="all">All fields</option>
+                                <option value="title">Title</option>
+                                <option value="note">Note</option>
+                                <option value="time">Time</option>
+                                <option value="type">Type</option>
                             </select>
                         </div>
                     </div>
@@ -615,8 +672,8 @@ function MainCalendar() {
             )}
 
             {modalDraft && (
-                <div className="task-modal-backdrop" onClick={closeTaskModal}>
-                    <div className="task-modal" onClick={(event) => event.stopPropagation()}>
+                <div className={`task-modal-backdrop ${isTaskModalClosing ? 'closing' : ''}`} onClick={closeTaskModal}>
+                    <div className={`task-modal ${isTaskModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
                         <div className="task-modal-header">
                             <h2>{isCreatingTask ? 'Create Event' : 'Edit Event'}</h2>
                             <button className="task-modal-close" onClick={closeTaskModal}>x</button>
@@ -699,11 +756,11 @@ function MainCalendar() {
             )}
 
             {isTypeModalOpen && (
-                <div className="task-modal-backdrop" onClick={() => setIsTypeModalOpen(false)}>
-                    <div className="task-modal type-create-modal" onClick={(event) => event.stopPropagation()}>
+                <div className={`task-modal-backdrop ${isTypeModalClosing ? 'closing' : ''}`} onClick={closeTypeModal}>
+                    <div className={`task-modal type-create-modal ${isTypeModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
                         <div className="task-modal-header">
                             <h2>{typeModalMode === 'edit' ? 'Edit Type' : 'Create Type'}</h2>
-                            <button className="task-modal-close" onClick={() => setIsTypeModalOpen(false)}>x</button>
+                            <button className="task-modal-close" onClick={closeTypeModal}>x</button>
                         </div>
 
                         <label className="task-modal-label">Type Name</label>
@@ -735,7 +792,7 @@ function MainCalendar() {
                                     Delete Type (move to other)
                                 </button>
                             )}
-                            <button className="task-modal-btn" onClick={() => setIsTypeModalOpen(false)}>Cancel</button>
+                            <button className="task-modal-btn" onClick={closeTypeModal}>Cancel</button>
                             <button
                                 className="task-modal-btn primary"
                                 onClick={addTaskTypeWithColor}
