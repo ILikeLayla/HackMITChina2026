@@ -529,8 +529,44 @@ body {
   margin-bottom: 0;
 }
 
+@keyframes filter-refresh-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.calendar-container.filter-refresh-active .task,
+.calendar-container.filter-refresh-active .day-view-task,
+.calendar-container.filter-refresh-active .list-card,
+.calendar-container.filter-refresh-active .list-view-empty,
+.calendar-container.filter-refresh-active .day-view-empty {
+  animation: filter-refresh-in 180ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  will-change: transform, opacity;
+}
+
 .task-time {
+  display: inline-block;
   font-weight: 700;
+  justify-self: center;
+  width: 32px;
+  text-overflow: clip;
+  margin: 0%;
+}
+
+.task-divider {
+  display: inline-block;
+  width: 2px;
+  height: 20px;
+  background: currentColor;
+  margin: 0 6px;
+  opacity: 0.1;
+  vertical-align: middle;
 }
 
 .clickable-task {
@@ -541,21 +577,6 @@ body {
 .clickable-task:hover {
   transform: translateY(-1px);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
-}
-
-.task.work {
-  background: #e3f2fd;
-  color: #1976d2;
-}
-
-.task.personal {
-  background: #e8f5e8;
-  color: #388e3c;
-}
-
-.task.important {
-  background: #ffebee;
-  color: #c62828;
 }
 
 .day-view {
@@ -891,13 +912,37 @@ body {
   }
 
   .nav-btn,
-  .today-btn,
   .view-btn,
   .header-tools-group select,
   .header-tools-group input {
     border: 1px solid #444;
     background-color: #333;
     color: #f6f6f6;
+  }
+
+  .header-tools-group select:focus,
+  .header-tools-group input:focus {
+    border-color: #396cd8;
+    outline: none;
+    box-shadow: 0 0 0 2px #396cd8aa;
+  }
+
+  .today-btn {
+    border: 1px solid #444;
+    background-color: #333;
+    color: #396cd8;
+  }
+
+  .nav-btn:hover:not(:disabled),
+  .today-btn:hover:not(:disabled),
+  .view-btn:hover:not(:disabled) {
+    background: #3a3a3a;
+  }
+
+  .view-btn.active:hover {
+    background: #3983d8;
+    color: white;
+    border-color: #3983d8;
   }
 
   .view-btn.active {
@@ -942,6 +987,10 @@ body {
     background: #3a3a3a;
   }
 
+  .day.today:hover {
+    background: #1a365ddd;
+  }
+
   .task.work {
     background: #1a365d;
     color: #64b5f6;
@@ -974,6 +1023,11 @@ body {
   .list-view-empty {
     background: #333;
     border: 1px solid #444;
+  }
+
+  .list-card.today {
+    background: #1a365d;
+    border: 1px solid #396cd8;
   }
 
   .task-modal {
@@ -1052,7 +1106,7 @@ body {
     flex-direction: column;
   }
 
-  .header-tools-collapsible.open {
+  .header-tools-collapsible {
     margin-left: auto;
   }
 
@@ -1087,13 +1141,13 @@ body {
     font-size: 12px;
   }
 
-  .task {
+  .list-card-task {
     font-size: 13px;
     padding: 3px 5px;
   }
 }
 
-@media (max-width: 570px) {
+@media (max-width: 600px) {
   .calendar-header {
     animation: responsive-layout-shift 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
   }
@@ -1136,6 +1190,14 @@ body {
   .view-selector,
   .header-tools {
     transition: none;
+    animation: none;
+  }
+
+  .calendar-container.filter-refresh-active .task,
+  .calendar-container.filter-refresh-active .day-view-task,
+  .calendar-container.filter-refresh-active .list-card,
+  .calendar-container.filter-refresh-active .list-view-empty,
+  .calendar-container.filter-refresh-active .day-view-empty {
     animation: none;
   }
 }

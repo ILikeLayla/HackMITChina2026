@@ -54,6 +54,7 @@ async function get_events() {
 }
 
 const MODAL_CLOSE_ANIMATION_MS = 180;
+const FILTER_REFRESH_ANIMATION_MS = 180;
 
 function MainCalendar() {
     const [currentDate, setCurrentDate] = useState(new Date());
@@ -77,6 +78,7 @@ function MainCalendar() {
     const [filterKeyword, setFilterKeyword] = useState('');
     const [searchScope, setSearchScope] = useState<SearchScope>('all');
     const [isHeaderToolsOpen, setIsHeaderToolsOpen] = useState(false);
+    const [isFilterRefreshActive, setIsFilterRefreshActive] = useState(false);
     const [filtersButtonWidth, setFiltersButtonWidth] = useState<number | null>(null);
     const [modalDraft, setModalDraft] = useState<Omit<CalendarTask, 'id' | 'date'> | null>(null);
     const listScrollTargetRef = useRef<HTMLDivElement | null>(null);
@@ -84,6 +86,9 @@ function MainCalendar() {
     const viewTransitionTimerRef = useRef<number | null>(null);
     const taskModalCloseTimerRef = useRef<number | null>(null);
     const typeModalCloseTimerRef = useRef<number | null>(null);
+    const filterRefreshTimerRef = useRef<number | null>(null);
+    const filterRefreshRafRef = useRef<number | null>(null);
+    const hasMountedFilterControlsRef = useRef(false);
     const filtersButtonMeasureRef = useRef<HTMLSpanElement | null>(null);
 
     const selectedTask = tasks.find(task => task.id === selectedTaskId) ?? null;
@@ -118,6 +123,18 @@ function MainCalendar() {
         if (typeModalCloseTimerRef.current !== null) {
             window.clearTimeout(typeModalCloseTimerRef.current);
             typeModalCloseTimerRef.current = null;
+        }
+    };
+
+    const clearFilterRefreshAnimation = () => {
+        if (filterRefreshTimerRef.current !== null) {
+            window.clearTimeout(filterRefreshTimerRef.current);
+            filterRefreshTimerRef.current = null;
+        }
+
+        if (filterRefreshRafRef.current !== null) {
+            window.cancelAnimationFrame(filterRefreshRafRef.current);
+            filterRefreshRafRef.current = null;
         }
     };
 
@@ -217,6 +234,7 @@ function MainCalendar() {
             cancelViewTransition();
             clearTaskModalCloseTimer();
             clearTypeModalCloseTimer();
+            clearFilterRefreshAnimation();
         };
     }, []);
 
@@ -244,6 +262,25 @@ function MainCalendar() {
         const textWidth = Math.ceil(filtersButtonMeasureRef.current.getBoundingClientRect().width);
         setFiltersButtonWidth(textWidth + FILTER_BUTTON_HORIZONTAL_PADDING_PX + FILTER_BUTTON_BORDER_PX);
     }, [isHeaderToolsOpen]);
+
+    useEffect(() => {
+        if (!hasMountedFilterControlsRef.current) {
+            hasMountedFilterControlsRef.current = true;
+            return;
+        }
+
+        clearFilterRefreshAnimation();
+        setIsFilterRefreshActive(false);
+
+        filterRefreshRafRef.current = window.requestAnimationFrame(() => {
+            setIsFilterRefreshActive(true);
+            filterRefreshTimerRef.current = window.setTimeout(() => {
+                setIsFilterRefreshActive(false);
+                filterRefreshTimerRef.current = null;
+            }, FILTER_REFRESH_ANIMATION_MS);
+            filterRefreshRafRef.current = null;
+        });
+    }, [filterType, filterKeyword, searchScope]);
 
     const renderViewContent = (mode: ViewMode, displayDate: Date) => {
         if (mode === 'list') {
@@ -559,7 +596,7 @@ function MainCalendar() {
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
 
     return (
-        <main className={`calendar-container ${viewMode === 'list' ? 'list-scroll-mode' : ''}`}>
+        <main className={`calendar-container ${viewMode === 'list' ? 'list-scroll-mode' : ''} ${isFilterRefreshActive ? 'filter-refresh-active' : ''}`}>
             <div className="calendar-header sticky-header">
                 <div className="header-top-row">
                     <div className="calendar-nav">

@@ -65,13 +65,13 @@ export function generateWeekViewDOM({
                                             key={task.id}
                                             className={`task clickable-task ${task.type}`}
                                             style={getTaskStyle(task.type)}
-                                            title={`${task.title} | ${task.time}`}
+                                            title={`${task.title} ${task.time}`}
                                             onClick={(event) => {
                                                 event.stopPropagation();
                                                 openTaskModal(task);
                                             }}
                                         >
-                                            <span className="task-time">{task.time}</span> {task.title}
+                                            <p className="task-time">{task.time}</p><div className="task-divider" aria-hidden="true"></div>{task.title}
                                         </div>
                                     ))}
                                 </div>
@@ -121,7 +121,7 @@ export function generateDayViewDOM({
                             style={getTaskStyle(task.type)}
                             onClick={() => openTaskModal(task)}
                         >
-                            <div className="day-view-task-main">{task.time} {task.title}</div>
+                            <div className="day-view-task-main">{task.time}<div className="task-divider" aria-hidden="true"></div>{task.title}</div>
                             <div className="day-view-task-note">{task.note || 'No note'}</div>
                         </div>
                     ))
@@ -179,7 +179,7 @@ export function generateListViewDOM({
                                         style={getTaskStyle(task.type)}
                                         onClick={() => openTaskModal(task)}
                                     >
-                                        <div className="list-card-task-main">{task.time} {task.title}</div>
+                                        <div className="list-card-task-main">{task.time}<div className="task-divider" aria-hidden="true"></div>{task.title}</div>
                                         <div className="list-card-task-note">{task.note || 'No note'}</div>
                                     </div>
                                 ))}
@@ -234,13 +234,13 @@ export function generateMonthViewDOM({
                                                 key={task.id}
                                                 className={`task clickable-task ${task.type}`}
                                                 style={getTaskStyle(task.type)}
-                                                title={`${task.title} | ${task.time}`}
+                                                title={`${task.title} ${task.time}`}
                                                 onClick={(event) => {
                                                     event.stopPropagation();
                                                     openTaskModal(task);
                                                 }}
                                             >
-                                                <span className="task-time">{task.time}</span> {task.title}
+                                                <p className="task-time">{task.time}</p><div className="task-divider" aria-hidden="true"></div>{task.title}
                                             </div>
                                         ))}
                                     </div>
