@@ -1,0 +1,131 @@
+export type TaskType = string;
+
+export interface CalendarTask {
+    id: number;
+    title: string;
+    date: string;
+    type: TaskType;
+    time: string;
+    note: string;
+}
+
+export interface CalendarDay {
+    day: number;
+    month: number;
+    year: number;
+    isOtherMonth?: boolean;
+    isToday?: boolean;
+}
+
+export function parseTaskDate(dateStr: string) {
+    return new Date(`${dateStr}T00:00:00`);
+}
+
+export function isValidHexColor(value: string) {
+    return /^#[0-9A-Fa-f]{6}$/.test(value);
+}
+
+export function getReadableTextColor(hexColor: string) {
+    const color = hexColor.replace('#', '');
+    const red = parseInt(color.substring(0, 2), 16);
+    const green = parseInt(color.substring(2, 4), 16);
+    const blue = parseInt(color.substring(4, 6), 16);
+    const brightness = (red * 299 + green * 587 + blue * 114) / 1000;
+    return brightness > 160 ? '#1d1d1d' : '#ffffff';
+}
+
+export function generateCalendarDays(currentDate: Date) {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const firstDayOfMonth = new Date(year, month, 1).getDay();
+    const days: CalendarDay[] = [];
+
+    const prevMonthDays = new Date(year, month, 0).getDate();
+    for (let i = firstDayOfMonth - 1; i >= 0; i--) {
+        days.push({
+            day: prevMonthDays - i,
+            month: month - 1,
+            year,
+            isOtherMonth: true,
+        });
+    }
+
+    const now = new Date();
+    for (let i = 1; i <= daysInMonth; i++) {
+        days.push({
+            day: i,
+            month,
+            year,
+            isOtherMonth: false,
+            isToday: i === now.getDate() && month === now.getMonth() && year === now.getFullYear(),
+        });
+    }
+
+    // const remainingDays = 42 - days.length;
+    const remainingDays = (7 - (days.length % 7)) % 7; // Ensure we only add the necessary days to complete the last week
+
+    for (let i = 1; i <= remainingDays; i++) {
+        days.push({
+            day: i,
+            month: month + 1,
+            year,
+            isOtherMonth: true,
+        });
+    }
+
+    return days;
+}
+
+export function generateWeekDays(currentDate: Date) {
+    const startOfWeek = new Date(currentDate);
+    startOfWeek.setDate(currentDate.getDate() - currentDate.getDay());
+
+    const now = new Date();
+    const weekDays: CalendarDay[] = [];
+    for (let i = 0; i < 7; i++) {
+        const date = new Date(startOfWeek);
+        date.setDate(startOfWeek.getDate() + i);
+        weekDays.push({
+            day: date.getDate(),
+            month: date.getMonth(),
+            year: date.getFullYear(),
+            isToday:
+                date.getDate() === now.getDate() &&
+                date.getMonth() === now.getMonth() &&
+                date.getFullYear() === now.getFullYear(),
+        });
+    }
+
+    return weekDays;
+}
+
+export function getWeekTitle(currentDate: Date) {
+    const start = new Date(currentDate);
+    start.setDate(currentDate.getDate() - currentDate.getDay());
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+
+    const startLabel = start.toLocaleDateString('default', { month: 'short', day: 'numeric' });
+    const endLabel = end.toLocaleDateString('default', { month: 'short', day: 'numeric' });
+
+    return `${startLabel} - ${endLabel}, ${end.getFullYear()}`;
+}
+
+export function getDayTitle(currentDate: Date) {
+    return currentDate.toLocaleDateString('default', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+    });
+}
+
+export function getFirstUpcomingTaskKey(listTaskGroups: [string, CalendarTask[]][]) {
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    return listTaskGroups.find(([key]) => {
+        const [year, month, day] = key.split('-').map(Number);
+        return new Date(year, month, day).getTime() >= todayStart;
+    })?.[0] ?? listTaskGroups[0]?.[0];
+}
