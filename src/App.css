@@ -448,6 +448,8 @@
 .day.today {
   background: #e3f2fd;
   border: 1px solid #2196f3;
+  /* offset the 1px border from the width despite the flex gap */
+  margin: -1px;
 }
 
 .day-number {
