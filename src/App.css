@@ -160,6 +160,15 @@ body {
   background: #f0f0f0;
 }
 
+.nav-ai-create-btn {
+  color: #396cd8;
+  font-weight: 600;
+}
+
+.nav-ai-create-btn:hover:not(:disabled) {
+  background: #edf3ff;
+}
+
 .calendar-title {
   padding-top: 2px;
   font-size: 20px;
@@ -977,6 +986,39 @@ body {
   width: min(520px, 100%);
 }
 
+.ai-create-modal {
+  width: min(900px, 100%);
+}
+
+.ai-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.ai-modal-section {
+  min-width: 0;
+}
+
+.ai-modal-section .task-modal-textarea {
+  height: 242px;
+  margin-bottom: 0;
+}
+
+.ai-reply-panel {
+  height: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid #d6d6d6;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fafafa;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .type-color-picker-row {
   display: grid;
   grid-template-columns: 56px 1fr;
@@ -1031,6 +1073,54 @@ body {
   color: #b3261e;
   margin-right: auto;
   white-space: normal;
+}
+
+.snackbar-action-group {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-height: 34px;
+  overflow: hidden;
+}
+
+.snackbar-action-text {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  height: 34px;
+  line-height: 1;
+  padding: 0 10px;
+}
+
+.snackbar-action-btn {
+  background: transparent;
+  border: 0;
+  padding: 0 14px;
+  height: 34px;
+  min-height: 34px;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 700;
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  justify-content: center;
+}
+
+.snackbar-action-btn-reconnect {
+  color: #7a2b00;
+}
+
+.snackbar-action-btn-reconnect:hover {
+  background: rgba(122, 43, 0, 0.08);
+}
+
+.snackbar-action-btn-dismiss {
+  color: #4f3f33;
+}
+
+.snackbar-action-btn-dismiss:hover {
+  background: rgba(79, 63, 51, 0.08);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1194,6 +1284,20 @@ body {
     color: #f6f6f6;
   }
 
+  .nav-ai-create-btn {
+    color: #84a9ff;
+  }
+
+  .nav-ai-create-btn:hover:not(:disabled) {
+    background: #253656;
+  }
+
+  .ai-reply-panel {
+    background: #2a2a2a;
+    border-color: #555;
+    color: #f6f6f6;
+  }
+
   .task-modal-btn.danger {
     background: #4a2e2e;
     border-color: #6a3b3b;
@@ -1238,6 +1342,7 @@ body {
   }
 
   .nav-new-event-btn,
+  .nav-ai-create-btn,
   .view-btn-filters {
     margin-left: auto;
   }
@@ -1290,6 +1395,15 @@ body {
   .list-card-task {
     font-size: 13px;
     padding: 3px 5px;
+  }
+
+  .ai-modal-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-modal-section .task-modal-textarea,
+  .ai-reply-panel {
+    min-height: 160px;
   }
 }
 

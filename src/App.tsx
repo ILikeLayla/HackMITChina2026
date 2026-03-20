@@ -48,6 +48,7 @@ import {
     type CalendarTask,
     type TaskType,
 } from "./general_utils";
+import { SnackbarProvider, closeSnackbar, enqueueSnackbar } from 'notistack';
 
 async function get_events() {
     console.log(await invoke('get_events'));
@@ -55,6 +56,7 @@ async function get_events() {
 
 const MODAL_CLOSE_ANIMATION_MS = 180;
 const FILTER_REFRESH_ANIMATION_MS = 180;
+const AI_REQUEST_TIMEOUT_MS = 180000;
 
 function MainCalendar() {
     const [currentDate, setCurrentDate] = useState(new Date());
@@ -70,6 +72,11 @@ function MainCalendar() {
     const [isTypeModalOpen, setIsTypeModalOpen] = useState(false);
     const [isTaskModalClosing, setIsTaskModalClosing] = useState(false);
     const [isTypeModalClosing, setIsTypeModalClosing] = useState(false);
+    const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+    const [isAiModalClosing, setIsAiModalClosing] = useState(false);
+    const [isAiSubmitting, setIsAiSubmitting] = useState(false);
+    const [aiTaskDescription, setAiTaskDescription] = useState('');
+    const [aiReplyText, setAiReplyText] = useState('');
     const [typeModalMode, setTypeModalMode] = useState<'create' | 'edit'>('create');
     const [typeEditingOriginalName, setTypeEditingOriginalName] = useState<string | null>(null);
     const [typeDraftName, setTypeDraftName] = useState('');
@@ -86,6 +93,7 @@ function MainCalendar() {
     const viewTransitionTimerRef = useRef<number | null>(null);
     const taskModalCloseTimerRef = useRef<number | null>(null);
     const typeModalCloseTimerRef = useRef<number | null>(null);
+    const aiModalCloseTimerRef = useRef<number | null>(null);
     const filterRefreshTimerRef = useRef<number | null>(null);
     const filterRefreshRafRef = useRef<number | null>(null);
     const hasMountedFilterControlsRef = useRef(false);
@@ -93,6 +101,322 @@ function MainCalendar() {
 
     const selectedTask = tasks.find(task => task.id === selectedTaskId) ?? null;
     const nextTaskId = tasks.reduce((maxId, task) => Math.max(maxId, task.id), 0) + 1;
+
+    const ws = useRef<WebSocket | null>(null);
+    const createdTaskAckResult = useRef<string | null>(null);
+    const aiTaskCreationResult = useRef<string | null>(null);
+    const hasEverConnectedWsRef = useRef(false);
+    const isUnmountingRef = useRef(false);
+    const taskTypesRef = useRef(taskTypes);
+    const nextTaskIdRef = useRef(nextTaskId);
+    const wsDisconnectedSnackbarIdRef = useRef<string | number | null>(null);
+    const wsReconnectingSnackbarIdRef = useRef<string | number | null>(null);
+    const aiProcessingSnackbarIdRef = useRef<string | number | null>(null);
+    const aiResultPollTimerRef = useRef<number | null>(null);
+    const aiRequestDeadlineRef = useRef<number | null>(null);
+    const isManualWsCloseRef = useRef(false);
+    const isAiSubmittingRef = useRef(false);
+
+    useEffect(() => {
+        taskTypesRef.current = taskTypes;
+    }, [taskTypes]);
+
+    useEffect(() => {
+        nextTaskIdRef.current = nextTaskId;
+    }, [nextTaskId]);
+
+    useEffect(() => {
+        isAiSubmittingRef.current = isAiSubmitting;
+    }, [isAiSubmitting]);
+
+    const clearAiResultPollTimer = () => {
+        if (aiResultPollTimerRef.current !== null) {
+            window.clearTimeout(aiResultPollTimerRef.current);
+            aiResultPollTimerRef.current = null;
+        }
+    };
+
+    const clearAiProcessingSnackbar = () => {
+        if (aiProcessingSnackbarIdRef.current !== null) {
+            closeSnackbar(aiProcessingSnackbarIdRef.current);
+            aiProcessingSnackbarIdRef.current = null;
+        }
+    };
+
+    const stopAiSubmitting = (options?: { closeConnection?: boolean }) => {
+        clearAiResultPollTimer();
+        clearAiProcessingSnackbar();
+        aiRequestDeadlineRef.current = null;
+        setIsAiSubmitting(false);
+
+        if (options?.closeConnection) {
+            const socket = ws.current;
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                isManualWsCloseRef.current = true;
+                socket.close(1000, 'AI request canceled by user');
+                ws.current = null;
+            }
+        }
+    };
+
+    const AiProcessingSnackbarContent = ({
+        timeoutMs,
+        deadlineRef,
+        onCancel,
+    }: {
+        timeoutMs: number;
+        deadlineRef: React.MutableRefObject<number | null>;
+        onCancel: () => void;
+    }) => {
+        const getRemainingSeconds = () => {
+            const deadline = deadlineRef.current;
+            if (deadline === null) {
+                return 0;
+            }
+            return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        };
+        const [remainingSeconds, setRemainingSeconds] = useState(getRemainingSeconds);
+
+        useEffect(() => {
+            const timerId = window.setInterval(() => {
+                setRemainingSeconds(getRemainingSeconds());
+            }, 250);
+
+            return () => {
+                window.clearInterval(timerId);
+            };
+        }, [timeoutMs, deadlineRef]);
+
+        return (
+            <div className="snackbar-action-group">
+                <span className="snackbar-action-text">AI is processing your request... ({remainingSeconds}s)</span>
+                <button
+                    className="task-modal-btn snackbar-action-btn snackbar-action-btn-dismiss"
+                    onClick={onCancel}
+                >
+                    Cancel
+                </button>
+            </div>
+        );
+    };
+
+    const clearWsDisconnectedSnackbar = () => {
+        if (wsDisconnectedSnackbarIdRef.current !== null) {
+            closeSnackbar(wsDisconnectedSnackbarIdRef.current);
+            wsDisconnectedSnackbarIdRef.current = null;
+        }
+    };
+
+    const clearWsReconnectingSnackbar = () => {
+        if (wsReconnectingSnackbarIdRef.current !== null) {
+            closeSnackbar(wsReconnectingSnackbarIdRef.current);
+            wsReconnectingSnackbarIdRef.current = null;
+        }
+    };
+
+    const enqueueWsReconnectingSnackbar = () => {
+        if (wsReconnectingSnackbarIdRef.current !== null) {
+            return;
+        }
+
+        const snackbarId = enqueueSnackbar('Reconnecting to AI service...', {
+            variant: 'info',
+            persist: true,
+            onClose: () => {
+                wsReconnectingSnackbarIdRef.current = null;
+            },
+        });
+
+        wsReconnectingSnackbarIdRef.current = snackbarId;
+    };
+
+    const enqueueWsDisconnectedSnackbar = () => {
+        if (wsDisconnectedSnackbarIdRef.current !== null) {
+            return;
+        }
+
+        const snackbarId = enqueueSnackbar('WebSocket connection lost.', {
+            variant: 'warning',
+            persist: true,
+            action: (id) => (
+                <div className="snackbar-action-group">
+                    <button
+                        className="task-modal-btn snackbar-action-btn snackbar-action-btn-reconnect"
+                        onClick={() => {
+                            closeSnackbar(id);
+                            wsDisconnectedSnackbarIdRef.current = null;
+                            enqueueWsReconnectingSnackbar();
+                            connectWebSocket();
+                        }}
+                    >
+                        Reconnect
+                    </button>
+                    <button
+                        className="task-modal-btn snackbar-action-btn snackbar-action-btn-dismiss"
+                        onClick={() => {
+                            closeSnackbar(id);
+                            wsDisconnectedSnackbarIdRef.current = null;
+                        }}
+                    >
+                        Dismiss
+                    </button>
+                </div>
+            ),
+            onClose: () => {
+                wsDisconnectedSnackbarIdRef.current = null;
+            },
+        });
+
+        wsDisconnectedSnackbarIdRef.current = snackbarId;
+    };
+
+    const connectWebSocket = () => {
+        const existing = ws.current;
+        if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+
+        const socket = new WebSocket('ws://localhost:8765');
+        ws.current = socket;
+
+        const handleMessage = (event: MessageEvent) => {
+            console.log('Received message from WebSocket:', event.data);
+            // start with "newing_task: " followed by a date string in json format
+            if (typeof event.data === 'string' && event.data.startsWith('newing_task: ')) {
+                console.log('Handling newing_task message');
+                const task_info = JSON.parse(event.data.substring('newing_task: '.length));
+                const date = task_info.date ? new Date(task_info.date) : new Date();
+                const title = task_info.title || '';
+                // check if type is valid, otherwise create a new type with random color
+                let type = task_info.type || 'other';
+                if (!taskTypesRef.current.includes(type)) {
+                    const randomColor = `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`;
+                    setTaskTypes(prev => [...prev, type]);
+                    setTaskTypeColors(prev => ({
+                        ...prev,
+                        [type]: randomColor,
+                    }));
+                }
+
+                const time = task_info.time || '';
+                const note = task_info.note || '';
+                const computedTaskId = nextTaskIdRef.current;
+                nextTaskIdRef.current = computedTaskId + 1;
+                const newTask: CalendarTask = {
+                    id: computedTaskId,
+                    title,
+                    type,
+                    time,
+                    note,
+                    date: buildDateString(date),
+                };
+
+                setTasks(prev => [...prev, newTask]);
+                if (isAiSubmittingRef.current) {
+                    aiRequestDeadlineRef.current = Date.now() + AI_REQUEST_TIMEOUT_MS;
+                }
+                console.log('Created new task from WebSocket message:', newTask);
+                createdTaskAckResult.current = null;
+                ws.current?.send(`created_task: ${JSON.stringify(newTask)}`);
+                // disable the handler and listen for "Acknowledged task creation result" text in ws here, if not recieved within 1 second, resend. repeat 5 times.
+                let resendAttempts = 0;
+                const waitForAcknowledgement = () => {
+                    if (createdTaskAckResult.current === 'Acknowledged task creation result') {
+                        console.log('Received acknowledgement for task creation result');
+                        createdTaskAckResult.current = null;
+                        return;
+                    }
+                    if (resendAttempts >= 10) {
+                        console.warn('Did not receive acknowledgement for task creation result after 10 attempts, giving up');
+                        return;
+                    }
+                    resendAttempts++;
+                    console.warn(`Did not receive acknowledgement for task creation result, resending... (attempt ${resendAttempts})`);
+                    ws.current?.send(`created_task: ${JSON.stringify(newTask)}`);
+                    setTimeout(waitForAcknowledgement, 2000);
+                };
+                waitForAcknowledgement();
+                enqueueSnackbar('AI created a new task: ' + title, { variant: 'success' });
+            } 
+
+            if (typeof event.data === 'string' && event.data.startsWith('ack_created_task: ')) {
+                console.log('Handling ack_created_task message');
+                createdTaskAckResult.current = event.data.substring('ack_created_task: '.length);
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('task_creation_result: ')) {
+                console.log('Handling task_creation_result message');
+                aiTaskCreationResult.current = event.data.substring('task_creation_result: '.length);
+            }
+        };
+
+        const handleOpen = () => {
+            hasEverConnectedWsRef.current = true;
+            clearWsDisconnectedSnackbar();
+            clearWsReconnectingSnackbar();
+            enqueueSnackbar('AI service connected.', { variant: 'success' });
+        };
+
+        const handleClose = () => {
+            const wasManualClose = isManualWsCloseRef.current;
+            if (wasManualClose) {
+                isManualWsCloseRef.current = false;
+            }
+
+            if (ws.current === socket) {
+                ws.current = null;
+            }
+
+            clearWsReconnectingSnackbar();
+
+            if (wasManualClose) {
+                if (!isUnmountingRef.current) {
+                    enqueueSnackbar('Connection closed.', { variant: 'default' });
+                    connectWebSocket();
+                }
+                return;
+            }
+
+            if (isAiSubmittingRef.current) {
+                stopAiSubmitting();
+                enqueueSnackbar('Connection lost while waiting for AI response.', { variant: 'warning' });
+            }
+
+            if (!isUnmountingRef.current) {
+                enqueueWsDisconnectedSnackbar();
+            }
+        };
+
+        const handleError = () => {
+            clearWsReconnectingSnackbar();
+            if (isAiSubmittingRef.current) {
+                stopAiSubmitting();
+                enqueueSnackbar('Connection error while waiting for AI response.', { variant: 'warning' });
+            }
+            if (!isUnmountingRef.current) {
+                enqueueWsDisconnectedSnackbar();
+            }
+        };
+
+        socket.addEventListener('message', handleMessage);
+        socket.addEventListener('open', handleOpen);
+        socket.addEventListener('close', handleClose);
+        socket.addEventListener('error', handleError);
+    };
+
+    useEffect(() => {
+        isUnmountingRef.current = false;
+        connectWebSocket();
+
+        return () => {
+            isUnmountingRef.current = true;
+            stopAiSubmitting();
+            clearWsDisconnectedSnackbar();
+            clearWsReconnectingSnackbar();
+            ws.current?.close();
+            ws.current = null;
+        };
+    }, []);
 
     const cancelDateTransition = () => {
         if (dateTransitionTimerRef.current !== null) {
@@ -123,6 +447,13 @@ function MainCalendar() {
         if (typeModalCloseTimerRef.current !== null) {
             window.clearTimeout(typeModalCloseTimerRef.current);
             typeModalCloseTimerRef.current = null;
+        }
+    };
+
+    const clearAiModalCloseTimer = () => {
+        if (aiModalCloseTimerRef.current !== null) {
+            window.clearTimeout(aiModalCloseTimerRef.current);
+            aiModalCloseTimerRef.current = null;
         }
     };
 
@@ -234,6 +565,7 @@ function MainCalendar() {
             cancelViewTransition();
             clearTaskModalCloseTimer();
             clearTypeModalCloseTimer();
+            clearAiModalCloseTimer();
             clearFilterRefreshAnimation();
         };
     }, []);
@@ -504,6 +836,100 @@ function MainCalendar() {
         }, MODAL_CLOSE_ANIMATION_MS);
     };
 
+    const openAiCreateModal = () => {
+        clearAiModalCloseTimer();
+        setIsAiModalClosing(false);
+        setIsAiModalOpen(true);
+        setIsAiSubmitting(false);
+        setAiTaskDescription('');
+        setAiReplyText('');
+    };
+
+    const closeAiCreateModal = () => {
+        if (!isAiModalOpen || isAiModalClosing) {
+            return;
+        }
+
+        setIsAiModalClosing(true);
+        clearAiModalCloseTimer();
+        aiModalCloseTimerRef.current = window.setTimeout(() => {
+            setIsAiModalOpen(false);
+            setIsAiModalClosing(false);
+            aiModalCloseTimerRef.current = null;
+        }, MODAL_CLOSE_ANIMATION_MS);
+    };
+
+    const handleAiTaskDescriptionChange = (value: string) => {
+        setAiTaskDescription(value);
+    };
+
+    const handleCreateWithAi = () => {
+        if (isAiSubmitting) {
+            return;
+        }
+
+        if (!aiTaskDescription.trim()) {
+            enqueueSnackbar('Please enter a task description first.', { variant: 'warning' });
+            return;
+        }
+
+        setIsAiSubmitting(true);
+        console.log('AI Task Description:', aiTaskDescription);
+
+        const timeoutMs = AI_REQUEST_TIMEOUT_MS;
+        aiRequestDeadlineRef.current = Date.now() + timeoutMs;
+
+        const cancelAiRequest = () => {
+            if (!isAiSubmittingRef.current) {
+                return;
+            }
+
+            stopAiSubmitting({ closeConnection: true });
+            enqueueSnackbar('AI request canceled.', { variant: 'default' });
+        };
+
+        const snackbarId = enqueueSnackbar(
+            <AiProcessingSnackbarContent
+                timeoutMs={timeoutMs}
+                deadlineRef={aiRequestDeadlineRef}
+                onCancel={cancelAiRequest}
+            />,
+            {
+                variant: 'info',
+                persist: true,
+            },
+        );
+        aiProcessingSnackbarIdRef.current = snackbarId;
+
+        if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+            stopAiSubmitting();
+            enqueueWsDisconnectedSnackbar();
+            return;
+        }
+
+        aiTaskCreationResult.current = null;
+        ws.current?.send(`ai_task_description: ${aiTaskDescription}`);
+        // wait for the taskCreationResult to be set by the WebSocket message handler, then update the aiReplyText with the result
+        const checkForAiResult = () => {
+            if (!isAiSubmittingRef.current) {
+                return;
+            }
+
+            if (aiTaskCreationResult.current !== null) {
+                setAiReplyText(aiTaskCreationResult.current);
+                aiTaskCreationResult.current = null;
+                stopAiSubmitting();
+                enqueueSnackbar('AI has created tasks based on your description.', { variant: 'info' });
+            } else if (aiRequestDeadlineRef.current !== null && Date.now() > aiRequestDeadlineRef.current) {
+                stopAiSubmitting();
+                enqueueSnackbar('AI response timed out. Please try again.', { variant: 'warning' });
+            } else {
+                aiResultPollTimerRef.current = window.setTimeout(checkForAiResult, 500);
+            }
+        };
+        checkForAiResult();
+    };
+
     const openTypeCreateModal = () => {
         clearTypeModalCloseTimer();
         setIsTypeModalClosing(false);
@@ -604,6 +1030,8 @@ function MainCalendar() {
             return next;
         });
 
+        enqueueSnackbar(`Type "${targetType}" deleted. Tasks with this type have been moved to "${OTHER_TYPE}".`, { variant: 'error' });
+
         // Migrate all events with this type to `other`.
         setTasks(prev => prev.map(task => (
             task.type === targetType
@@ -646,6 +1074,7 @@ function MainCalendar() {
                 date: buildDateString(dateForNewTask),
             };
             setTasks(prev => [...prev, newTask]);
+            enqueueSnackbar('Task created.', { variant: 'success' });
         } else if (selectedTask) {
             setTasks(prev => prev.map(task => (
                 task.id === selectedTask.id
@@ -658,6 +1087,7 @@ function MainCalendar() {
                     }
                     : task
             )));
+            enqueueSnackbar('Task updated.', { variant: 'success' });
         }
 
         closeTaskModal();
@@ -670,6 +1100,7 @@ function MainCalendar() {
 
         setTasks(prev => prev.filter(task => task.id !== selectedTask.id));
         closeTaskModal();
+        enqueueSnackbar('Task deleted.', { variant: 'error' });
     };
 
     const handleDayClick = (day: CalendarDay) => {
@@ -687,6 +1118,7 @@ function MainCalendar() {
 
     return (
         <main className={`calendar-container ${viewMode === 'list' ? 'list-scroll-mode' : ''} ${isFilterRefreshActive ? 'filter-refresh-active' : ''}`}>
+            <SnackbarProvider maxSnack={4}/>
             <div className="calendar-header sticky-header">
                 <div className="header-top-row">
                     <div className="calendar-nav">
@@ -699,6 +1131,7 @@ function MainCalendar() {
                         <button className="today-btn" onClick={handleToday} disabled={viewTransition !== null || (dateTransition !== null && effectiveViewMode !== 'list')}>today</button>
                         <span className="button-divider" aria-hidden="true" />
                         <button className="nav-btn nav-new-event-btn" onClick={() => openCreateTaskModal(new Date())}>new event</button>
+                        <button className="nav-btn nav-ai-create-btn" onClick={openAiCreateModal}>create with ai</button>
                     </div>
 
                     <div className="calendar-title">
@@ -926,6 +1359,48 @@ function MainCalendar() {
                                 disabled={!typeDraftName.trim() || !isValidHexColor(typeDraftColor)}
                             >
                                 {typeModalMode === 'edit' ? 'Update Type' : 'Save Type'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isAiModalOpen && (
+                <div className={`task-modal-backdrop ${isAiModalClosing ? 'closing' : ''}`} onClick={closeAiCreateModal}>
+                    <div className={`task-modal ai-create-modal ${isAiModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
+                        <div className="task-modal-header">
+                            <h2>Create With AI</h2>
+                            <button className="task-modal-close" onClick={closeAiCreateModal}>x</button>
+                        </div>
+
+                        <div className="ai-modal-grid">
+                            <div className="ai-modal-section">
+                                <label className="task-modal-label" htmlFor="aiTaskDescription">Task Description</label>
+                                <textarea
+                                    id="aiTaskDescription"
+                                    className="task-modal-textarea"
+                                    placeholder="Describe what you want to create..."
+                                    value={aiTaskDescription}
+                                    onChange={(event) => handleAiTaskDescriptionChange(event.target.value)}
+                                />
+                            </div>
+
+                            <div className="ai-modal-section">
+                                <label className="task-modal-label" htmlFor="aiReplyPanel">AI Response</label>
+                                <div id="aiReplyPanel" className="ai-reply-panel">
+                                    {aiReplyText || 'AI response will appear here.'}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="task-modal-actions">
+                            <button className="task-modal-btn" onClick={closeAiCreateModal}>Close</button>
+                            <button
+                                className="task-modal-btn primary"
+                                onClick={handleCreateWithAi}
+                                disabled={isAiSubmitting}
+                            >
+                                {isAiSubmitting ? 'Sending...' : 'Send To AI'}
                             </button>
                         </div>
                     </div>
