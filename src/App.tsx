@@ -56,6 +56,7 @@ async function get_events() {
 
 const MODAL_CLOSE_ANIMATION_MS = 180;
 const FILTER_REFRESH_ANIMATION_MS = 180;
+const AI_REQUEST_TIMEOUT_MS = 180000;
 
 function MainCalendar() {
     const [currentDate, setCurrentDate] = useState(new Date());
@@ -102,7 +103,8 @@ function MainCalendar() {
     const nextTaskId = tasks.reduce((maxId, task) => Math.max(maxId, task.id), 0) + 1;
 
     const ws = useRef<WebSocket | null>(null);
-    const taskCreationResult = useRef<string| null>(null);
+    const createdTaskAckResult = useRef<string | null>(null);
+    const aiTaskCreationResult = useRef<string | null>(null);
     const hasEverConnectedWsRef = useRef(false);
     const isUnmountingRef = useRef(false);
     const taskTypesRef = useRef(taskTypes);
@@ -111,6 +113,8 @@ function MainCalendar() {
     const wsReconnectingSnackbarIdRef = useRef<string | number | null>(null);
     const aiProcessingSnackbarIdRef = useRef<string | number | null>(null);
     const aiResultPollTimerRef = useRef<number | null>(null);
+    const aiRequestDeadlineRef = useRef<number | null>(null);
+    const isManualWsCloseRef = useRef(false);
     const isAiSubmittingRef = useRef(false);
 
     useEffect(() => {
@@ -139,10 +143,61 @@ function MainCalendar() {
         }
     };
 
-    const stopAiSubmitting = () => {
+    const stopAiSubmitting = (options?: { closeConnection?: boolean }) => {
         clearAiResultPollTimer();
         clearAiProcessingSnackbar();
+        aiRequestDeadlineRef.current = null;
         setIsAiSubmitting(false);
+
+        if (options?.closeConnection) {
+            const socket = ws.current;
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                isManualWsCloseRef.current = true;
+                socket.close(1000, 'AI request canceled by user');
+                ws.current = null;
+            }
+        }
+    };
+
+    const AiProcessingSnackbarContent = ({
+        timeoutMs,
+        deadlineRef,
+        onCancel,
+    }: {
+        timeoutMs: number;
+        deadlineRef: React.MutableRefObject<number | null>;
+        onCancel: () => void;
+    }) => {
+        const getRemainingSeconds = () => {
+            const deadline = deadlineRef.current;
+            if (deadline === null) {
+                return 0;
+            }
+            return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        };
+        const [remainingSeconds, setRemainingSeconds] = useState(getRemainingSeconds);
+
+        useEffect(() => {
+            const timerId = window.setInterval(() => {
+                setRemainingSeconds(getRemainingSeconds());
+            }, 250);
+
+            return () => {
+                window.clearInterval(timerId);
+            };
+        }, [timeoutMs, deadlineRef]);
+
+        return (
+            <div className="snackbar-action-group">
+                <span className="snackbar-action-text">AI is processing your request... ({remainingSeconds}s)</span>
+                <button
+                    className="task-modal-btn snackbar-action-btn snackbar-action-btn-dismiss"
+                    onClick={onCancel}
+                >
+                    Cancel
+                </button>
+            </div>
+        );
     };
 
     const clearWsDisconnectedSnackbar = () => {
@@ -257,16 +312,41 @@ function MainCalendar() {
                 };
 
                 setTasks(prev => [...prev, newTask]);
+                if (isAiSubmittingRef.current) {
+                    aiRequestDeadlineRef.current = Date.now() + AI_REQUEST_TIMEOUT_MS;
+                }
                 console.log('Created new task from WebSocket message:', newTask);
-                setTimeout(() => {
-                    socket.send(`created_task: ${JSON.stringify(newTask)}`);
-                }, 2000);
+                createdTaskAckResult.current = null;
+                ws.current?.send(`created_task: ${JSON.stringify(newTask)}`);
+                // disable the handler and listen for "Acknowledged task creation result" text in ws here, if not recieved within 1 second, resend. repeat 5 times.
+                let resendAttempts = 0;
+                const waitForAcknowledgement = () => {
+                    if (createdTaskAckResult.current === 'Acknowledged task creation result') {
+                        console.log('Received acknowledgement for task creation result');
+                        createdTaskAckResult.current = null;
+                        return;
+                    }
+                    if (resendAttempts >= 10) {
+                        console.warn('Did not receive acknowledgement for task creation result after 10 attempts, giving up');
+                        return;
+                    }
+                    resendAttempts++;
+                    console.warn(`Did not receive acknowledgement for task creation result, resending... (attempt ${resendAttempts})`);
+                    ws.current?.send(`created_task: ${JSON.stringify(newTask)}`);
+                    setTimeout(waitForAcknowledgement, 2000);
+                };
+                waitForAcknowledgement();
                 enqueueSnackbar('AI created a new task: ' + title, { variant: 'success' });
+            } 
+
+            if (typeof event.data === 'string' && event.data.startsWith('ack_created_task: ')) {
+                console.log('Handling ack_created_task message');
+                createdTaskAckResult.current = event.data.substring('ack_created_task: '.length);
             }
 
             if (typeof event.data === 'string' && event.data.startsWith('task_creation_result: ')) {
                 console.log('Handling task_creation_result message');
-                taskCreationResult.current = event.data.substring('task_creation_result: '.length);
+                aiTaskCreationResult.current = event.data.substring('task_creation_result: '.length);
             }
         };
 
@@ -278,11 +358,24 @@ function MainCalendar() {
         };
 
         const handleClose = () => {
+            const wasManualClose = isManualWsCloseRef.current;
+            if (wasManualClose) {
+                isManualWsCloseRef.current = false;
+            }
+
             if (ws.current === socket) {
                 ws.current = null;
             }
 
             clearWsReconnectingSnackbar();
+
+            if (wasManualClose) {
+                if (!isUnmountingRef.current) {
+                    enqueueSnackbar('Connection closed.', { variant: 'default' });
+                    connectWebSocket();
+                }
+                return;
+            }
 
             if (isAiSubmittingRef.current) {
                 stopAiSubmitting();
@@ -780,15 +873,33 @@ function MainCalendar() {
             return;
         }
 
-        // TODO: wire your AI request callback here.
-        // Expected flow:
-        // 1) Send `aiTaskDescription` to your AI service.
-        // 2) Update `aiReplyText` with the response text.
-        // 3) Optionally parse returned data and create calendar tasks.
         setIsAiSubmitting(true);
-        const snackbarId = enqueueSnackbar('AI is processing your request...', { variant: 'info', persist: true});
-        aiProcessingSnackbarIdRef.current = snackbarId;
         console.log('AI Task Description:', aiTaskDescription);
+
+        const timeoutMs = AI_REQUEST_TIMEOUT_MS;
+        aiRequestDeadlineRef.current = Date.now() + timeoutMs;
+
+        const cancelAiRequest = () => {
+            if (!isAiSubmittingRef.current) {
+                return;
+            }
+
+            stopAiSubmitting({ closeConnection: true });
+            enqueueSnackbar('AI request canceled.', { variant: 'default' });
+        };
+
+        const snackbarId = enqueueSnackbar(
+            <AiProcessingSnackbarContent
+                timeoutMs={timeoutMs}
+                deadlineRef={aiRequestDeadlineRef}
+                onCancel={cancelAiRequest}
+            />,
+            {
+                variant: 'info',
+                persist: true,
+            },
+        );
+        aiProcessingSnackbarIdRef.current = snackbarId;
 
         if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
             stopAiSubmitting();
@@ -796,17 +907,20 @@ function MainCalendar() {
             return;
         }
 
+        aiTaskCreationResult.current = null;
         ws.current?.send(`ai_task_description: ${aiTaskDescription}`);
         // wait for the taskCreationResult to be set by the WebSocket message handler, then update the aiReplyText with the result
-        const startTime = Date.now();
-        const timeoutMs = 60000;
         const checkForAiResult = () => {
-            if (taskCreationResult.current !== null) {
-                setAiReplyText(taskCreationResult.current);
-                taskCreationResult.current = null;
+            if (!isAiSubmittingRef.current) {
+                return;
+            }
+
+            if (aiTaskCreationResult.current !== null) {
+                setAiReplyText(aiTaskCreationResult.current);
+                aiTaskCreationResult.current = null;
                 stopAiSubmitting();
                 enqueueSnackbar('AI has created tasks based on your description.', { variant: 'info' });
-            } else if (Date.now() - startTime > timeoutMs) {
+            } else if (aiRequestDeadlineRef.current !== null && Date.now() > aiRequestDeadlineRef.current) {
                 stopAiSubmitting();
                 enqueueSnackbar('AI response timed out. Please try again.', { variant: 'warning' });
             } else {
@@ -916,6 +1030,8 @@ function MainCalendar() {
             return next;
         });
 
+        enqueueSnackbar(`Type "${targetType}" deleted. Tasks with this type have been moved to "${OTHER_TYPE}".`, { variant: 'error' });
+
         // Migrate all events with this type to `other`.
         setTasks(prev => prev.map(task => (
             task.type === targetType
@@ -958,6 +1074,7 @@ function MainCalendar() {
                 date: buildDateString(dateForNewTask),
             };
             setTasks(prev => [...prev, newTask]);
+            enqueueSnackbar('Task created.', { variant: 'success' });
         } else if (selectedTask) {
             setTasks(prev => prev.map(task => (
                 task.id === selectedTask.id
@@ -970,6 +1087,7 @@ function MainCalendar() {
                     }
                     : task
             )));
+            enqueueSnackbar('Task updated.', { variant: 'success' });
         }
 
         closeTaskModal();
@@ -982,6 +1100,7 @@ function MainCalendar() {
 
         setTasks(prev => prev.filter(task => task.id !== selectedTask.id));
         closeTaskModal();
+        enqueueSnackbar('Task deleted.', { variant: 'error' });
     };
 
     const handleDayClick = (day: CalendarDay) => {
@@ -999,7 +1118,7 @@ function MainCalendar() {
 
     return (
         <main className={`calendar-container ${viewMode === 'list' ? 'list-scroll-mode' : ''} ${isFilterRefreshActive ? 'filter-refresh-active' : ''}`}>
-            <SnackbarProvider />
+            <SnackbarProvider maxSnack={4}/>
             <div className="calendar-header sticky-header">
                 <div className="header-top-row">
                     <div className="calendar-nav">

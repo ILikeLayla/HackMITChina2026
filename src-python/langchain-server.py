@@ -5,9 +5,9 @@ from langchain_ollama import ChatOllama
 import asyncio
 import websockets
 import json
-import queue
 import logging
-from dataclasses import dataclass
+import os
+import sys
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,14 +15,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger("langchain-server")
 
-task_creation_results = queue.Queue()
+task_creation_results = asyncio.Queue()
 active_websocket = None
-server_loop = None
 
 model = ChatOllama(model="gpt-oss:20b", temperature=0.7)
 
+
+def restart_current_process(reason: str):
+    logger.warning("Restarting server process: %s", reason)
+    python_executable = sys.executable
+    argv = [python_executable, *sys.argv]
+    os.execv(python_executable, argv)
+
 @tool
-def create_calendar_task(title: str, date: str, taskType: str, time: str, notes: str):
+async def create_calendar_task(title: str, date: str, taskType: str, time: str, notes: str):
     """Creates a calendar task with the given details.
     Args:
         title: The title of the task.
@@ -50,24 +56,20 @@ def create_calendar_task(title: str, date: str, taskType: str, time: str, notes:
     })
     logger.info("Task payload serialized: %s", task_json)
 
-    if active_websocket is None or server_loop is None:
+    if active_websocket is None:
         logger.error("No active websocket client is available for task creation")
         return "Failed to create task: No active websocket client connection."
 
     logger.info("Sending task creation request over websocket")
-    send_future = asyncio.run_coroutine_threadsafe(
-        active_websocket.send(f"newing_task: {task_json}"),
-        server_loop,
-    )
-    send_future.result(timeout=5)
+    await active_websocket.send(f"newing_task: {task_json}")
 
     # wait for the result from the calendar system
     try:
         logger.info("Waiting for task creation result from queue")
-        result_info = task_creation_results.get(timeout=50)
+        result_info = await asyncio.wait_for(task_creation_results.get(), timeout=50)
         logger.info("Received task creation result recieved successfully: %s", result_info)
         return f"Task creation result: {result_info}"
-    except queue.Empty:
+    except TimeoutError:
         logger.warning("Timeout waiting for task creation result")
         return "Failed to create task: No response from calendar system."
     
@@ -105,34 +107,50 @@ async def create_tasks_with_agent(task_description):
     return response_content
 
 
+async def handle_ai_request(websocket, task_info):
+    try:
+        logger.info("Processing ai_task_description payload: %s", task_info)
+        result = await create_tasks_with_agent(task_info)
+        logger.info("Sending task processing result back to client")
+        await websocket.send(f"task_creation_result: {result}")
+    except Exception as exc:
+        logger.exception("AI task processing failed: %s", exc)
+        if not websocket.closed:
+            await websocket.send("task_creation_result: Failed to process AI task request.")
+
+
 
 async def listen(websocket):
     global active_websocket
     active_websocket = websocket
+    background_tasks = set()
     logger.info("Client connected")
     try:
         async for message in websocket:
             logger.info("Incoming websocket message")
             if message.startswith("ai_task_description: "):
                 task_info = message[len("ai_task_description: "):]
-                logger.info("Processing ai_task_description payload: %s", task_info)
-                result = await create_tasks_with_agent(task_info)
-                logger.info("Sending task processing result back to client")
-                await active_websocket.send(f"task_creation_result: {result}")
+                task = asyncio.create_task(handle_ai_request(websocket, task_info))
+                background_tasks.add(task)
+                task.add_done_callback(background_tasks.discard)
             if message.startswith("created_task: "):
+                await active_websocket.send("ack_created_task: Acknowledged task creation result")
                 result_info = message[len("created_task: "):]
                 logger.info("Received task creation callback")
-                task_creation_results.put(result_info)
+                task_creation_results.put_nowait(result_info)
                 logger.info("Task creation result put into queue: %s", task_creation_results.qsize())
     finally:
+        for task in background_tasks:
+            task.cancel()
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
         if active_websocket is websocket:
             active_websocket = None
         logger.info("Client disconnected")
+        restart_current_process("websocket client disconnected")
 
 
 async def main():
-    global server_loop
-    server_loop = asyncio.get_running_loop()
     logger.info("Starting websocket server on 0.0.0.0:8765")
     async with websockets.serve(listen, "0.0.0.0", 8765):
         logger.info("Websocket server started; entering event loop")
