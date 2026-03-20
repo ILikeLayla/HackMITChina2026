@@ -70,6 +70,9 @@ function MainCalendar() {
     const [isTypeModalOpen, setIsTypeModalOpen] = useState(false);
     const [isTaskModalClosing, setIsTaskModalClosing] = useState(false);
     const [isTypeModalClosing, setIsTypeModalClosing] = useState(false);
+    const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+    const [aiTaskDescription, setAiTaskDescription] = useState('');
+    const [aiReplyText, setAiReplyText] = useState('');
     const [typeModalMode, setTypeModalMode] = useState<'create' | 'edit'>('create');
     const [typeEditingOriginalName, setTypeEditingOriginalName] = useState<string | null>(null);
     const [typeDraftName, setTypeDraftName] = useState('');
@@ -93,6 +96,65 @@ function MainCalendar() {
 
     const selectedTask = tasks.find(task => task.id === selectedTaskId) ?? null;
     const nextTaskId = tasks.reduce((maxId, task) => Math.max(maxId, task.id), 0) + 1;
+
+    const ws = useRef<WebSocket | null>(null);
+    const taskCreationResult = useRef<string| null>(null);
+    useEffect(() => {
+        ws.current = new WebSocket('ws://localhost:8765');
+
+        const handleMessage = (event: MessageEvent) => {
+            console.log('Received message from WebSocket:', event.data);
+            // start with "newing_task: " followed by a date string in json format
+            if (typeof event.data === 'string' && event.data.startsWith('newing_task: ')) {
+                console.log('Handling newing_task message');
+                const task_info = JSON.parse(event.data.substring('newing_task: '.length));
+                const date = task_info.date ? new Date(task_info.date) : new Date();
+                const title = task_info.title || '';
+                // check if type is valid, otherwise create a new type with random color
+                let type = task_info.type || OTHER_TYPE;
+                if (type !== OTHER_TYPE && !taskTypes.includes(type)) {
+                    type = type.trim().toLowerCase();
+                    if (!type) {
+                        type = OTHER_TYPE;
+                    } else {
+                        setTaskTypes(prev => [...prev, type]);
+                        setTaskTypeColors(prev => ({
+                            ...prev,
+                            [type]: task_info.color && isValidHexColor(task_info.color) ? task_info.color : `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`,
+                        }));
+                    }
+                }
+                const time = task_info.time || '';
+                const note = task_info.note || '';
+                const newTask: CalendarTask = {
+                    id: nextTaskId,
+                    title,
+                    type,
+                    time,
+                    note,
+                    date: buildDateString(date),
+                };
+                setTasks(prev => [...prev, newTask]);
+                console.log('Created new task from WebSocket message:', newTask);
+                // wait for 5 seconds
+                setTimeout(() => {
+                    ws.current?.send(`created_task: ${JSON.stringify(newTask)}`);
+                }, 5000);
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('task_creation_result: ')) {
+                console.log('Handling task_creation_result message');
+                taskCreationResult.current = event.data.substring('task_creation_result: '.length);
+            }
+
+        };
+        ws.current?.addEventListener('message', handleMessage);
+
+        return () => {
+            ws.current?.removeEventListener('message', handleMessage);
+            ws.current?.close();
+        };
+    }, [taskTypes, nextTaskId]);
 
     const cancelDateTransition = () => {
         if (dateTransitionTimerRef.current !== null) {
@@ -504,6 +566,40 @@ function MainCalendar() {
         }, MODAL_CLOSE_ANIMATION_MS);
     };
 
+    const openAiCreateModal = () => {
+        setIsAiModalOpen(true);
+        setAiTaskDescription('');
+        setAiReplyText('');
+    };
+
+    const closeAiCreateModal = () => {
+        setIsAiModalOpen(false);
+    };
+
+    const handleAiTaskDescriptionChange = (value: string) => {
+        setAiTaskDescription(value);
+    };
+
+    const handleCreateWithAi = () => {
+        // TODO: wire your AI request callback here.
+        // Expected flow:
+        // 1) Send `aiTaskDescription` to your AI service.
+        // 2) Update `aiReplyText` with the response text.
+        // 3) Optionally parse returned data and create calendar tasks.
+        console.log('AI Task Description:', aiTaskDescription);
+        ws.current?.send(`ai_task_description: ${aiTaskDescription}`);
+        // wait for the taskCreationResult to be set by the WebSocket message handler, then update the aiReplyText with the result
+        const checkForAiResult = () => {
+            if (taskCreationResult.current !== null) {
+                setAiReplyText(taskCreationResult.current);
+                taskCreationResult.current = null;
+            } else {
+                setTimeout(checkForAiResult, 500);
+            }
+        };
+        checkForAiResult();
+    };
+
     const openTypeCreateModal = () => {
         clearTypeModalCloseTimer();
         setIsTypeModalClosing(false);
@@ -699,6 +795,7 @@ function MainCalendar() {
                         <button className="today-btn" onClick={handleToday} disabled={viewTransition !== null || (dateTransition !== null && effectiveViewMode !== 'list')}>today</button>
                         <span className="button-divider" aria-hidden="true" />
                         <button className="nav-btn nav-new-event-btn" onClick={() => openCreateTaskModal(new Date())}>new event</button>
+                        <button className="nav-btn nav-ai-create-btn" onClick={openAiCreateModal}>create with ai</button>
                     </div>
 
                     <div className="calendar-title">
@@ -926,6 +1023,48 @@ function MainCalendar() {
                                 disabled={!typeDraftName.trim() || !isValidHexColor(typeDraftColor)}
                             >
                                 {typeModalMode === 'edit' ? 'Update Type' : 'Save Type'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {isAiModalOpen && (
+                <div className="task-modal-backdrop" onClick={closeAiCreateModal}>
+                    <div className="task-modal ai-create-modal" onClick={(event) => event.stopPropagation()}>
+                        <div className="task-modal-header">
+                            <h2>Create With AI</h2>
+                            <button className="task-modal-close" onClick={closeAiCreateModal}>x</button>
+                        </div>
+
+                        <div className="ai-modal-grid">
+                            <div className="ai-modal-section">
+                                <label className="task-modal-label" htmlFor="aiTaskDescription">Task Description</label>
+                                <textarea
+                                    id="aiTaskDescription"
+                                    className="task-modal-textarea"
+                                    placeholder="Describe what you want to create..."
+                                    value={aiTaskDescription}
+                                    onChange={(event) => handleAiTaskDescriptionChange(event.target.value)}
+                                />
+                            </div>
+
+                            <div className="ai-modal-section">
+                                <label className="task-modal-label" htmlFor="aiReplyPanel">AI Response</label>
+                                <div id="aiReplyPanel" className="ai-reply-panel">
+                                    {aiReplyText || 'AI response will appear here.'}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="task-modal-actions">
+                            <button className="task-modal-btn" onClick={closeAiCreateModal}>Close</button>
+                            <button
+                                className="task-modal-btn primary"
+                                onClick={handleCreateWithAi}
+                                disabled={!aiTaskDescription.trim()}
+                            >
+                                Send To AI
                             </button>
                         </div>
                     </div>

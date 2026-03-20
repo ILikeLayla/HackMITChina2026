@@ -160,6 +160,16 @@ body {
   background: #f0f0f0;
 }
 
+.nav-ai-create-btn {
+  border-color: #396cd8;
+  color: #396cd8;
+  font-weight: 600;
+}
+
+.nav-ai-create-btn:hover:not(:disabled) {
+  background: #edf3ff;
+}
+
 .calendar-title {
   padding-top: 2px;
   font-size: 20px;
@@ -977,6 +987,39 @@ body {
   width: min(520px, 100%);
 }
 
+.ai-create-modal {
+  width: min(900px, 100%);
+}
+
+.ai-modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.ai-modal-section {
+  min-width: 0;
+}
+
+.ai-modal-section .task-modal-textarea {
+  min-height: 220px;
+  margin-bottom: 0;
+}
+
+.ai-reply-panel {
+  min-height: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid #d6d6d6;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fafafa;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .type-color-picker-row {
   display: grid;
   grid-template-columns: 56px 1fr;
@@ -1194,6 +1237,21 @@ body {
     color: #f6f6f6;
   }
 
+  .nav-ai-create-btn {
+    border-color: #5f8fff;
+    color: #84a9ff;
+  }
+
+  .nav-ai-create-btn:hover:not(:disabled) {
+    background: #253656;
+  }
+
+  .ai-reply-panel {
+    background: #2a2a2a;
+    border-color: #555;
+    color: #f6f6f6;
+  }
+
   .task-modal-btn.danger {
     background: #4a2e2e;
     border-color: #6a3b3b;
@@ -1238,6 +1296,7 @@ body {
   }
 
   .nav-new-event-btn,
+  .nav-ai-create-btn,
   .view-btn-filters {
     margin-left: auto;
   }
@@ -1290,6 +1349,15 @@ body {
   .list-card-task {
     font-size: 13px;
     padding: 3px 5px;
+  }
+
+  .ai-modal-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-modal-section .task-modal-textarea,
+  .ai-reply-panel {
+    min-height: 160px;
   }
 }
 
