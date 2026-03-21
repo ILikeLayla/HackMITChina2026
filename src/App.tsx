@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
     defaultTypeColors,
     loadTaskTypeColorsFromTempDb,
@@ -116,6 +117,8 @@ function MainCalendar() {
     const aiRequestDeadlineRef = useRef<number | null>(null);
     const isManualWsCloseRef = useRef(false);
     const isAiSubmittingRef = useRef(false);
+    const isWindowCloseCleanupRunningRef = useRef(false);
+    const hasWindowDestroyBeenRequestedRef = useRef(false);
 
     useEffect(() => {
         taskTypesRef.current = taskTypes;
@@ -270,6 +273,98 @@ function MainCalendar() {
         wsDisconnectedSnackbarIdRef.current = snackbarId;
     };
 
+    const requestServerShutdown = async () => {
+        const sendShutdownWithAck = (socket: WebSocket, closeAfterAck: boolean) => {
+            return new Promise<boolean>((resolve) => {
+                let settled = false;
+
+                const finish = (ok: boolean) => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    window.clearTimeout(timeoutId);
+                    socket.removeEventListener('message', handleAckMessage);
+                    socket.removeEventListener('close', handleSocketClose);
+                    socket.removeEventListener('error', handleSocketError);
+                    if (closeAfterAck) {
+                        try {
+                            socket.close(1000, 'shutdown ack handled');
+                        } catch {
+                            // ignore close errors on temp socket
+                        }
+                    }
+                    resolve(ok);
+                };
+
+                const handleAckMessage = (event: MessageEvent) => {
+                    if (event.data === 'shutdown_ack') {
+                        finish(true);
+                    }
+                };
+
+                const handleSocketClose = () => {
+                    finish(false);
+                };
+
+                const handleSocketError = () => {
+                    finish(false);
+                };
+
+                const timeoutId = window.setTimeout(() => {
+                    finish(false);
+                }, 3000);
+
+                socket.addEventListener('message', handleAckMessage);
+                socket.addEventListener('close', handleSocketClose);
+                socket.addEventListener('error', handleSocketError);
+
+                try {
+                    socket.send('shutdown_server:window_close');
+                } catch {
+                    finish(false);
+                }
+            });
+        };
+
+        const mainSocket = ws.current;
+        if (mainSocket && mainSocket.readyState === WebSocket.OPEN) {
+            const acknowledged = await sendShutdownWithAck(mainSocket, false);
+            if (acknowledged) {
+                return true;
+            }
+        }
+
+        const tempSocket = await new Promise<WebSocket | null>((resolve) => {
+            let done = false;
+            const socket = new WebSocket('ws://localhost:8765');
+
+            const finish = (result: WebSocket | null) => {
+                if (done) {
+                    return;
+                }
+                done = true;
+                window.clearTimeout(timeoutId);
+                socket.removeEventListener('open', handleOpen);
+                socket.removeEventListener('error', handleError);
+                resolve(result);
+            };
+
+            const handleOpen = () => finish(socket);
+            const handleError = () => finish(null);
+
+            const timeoutId = window.setTimeout(() => finish(null), 1500);
+            socket.addEventListener('open', handleOpen, { once: true });
+            socket.addEventListener('error', handleError, { once: true });
+        });
+
+        if (!tempSocket) {
+            return false;
+        }
+
+        return await sendShutdownWithAck(tempSocket, true);
+    };
+
     const connectWebSocket = () => {
         const existing = ws.current;
         if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
@@ -346,7 +441,15 @@ function MainCalendar() {
 
             if (typeof event.data === 'string' && event.data.startsWith('task_creation_result: ')) {
                 console.log('Handling task_creation_result message');
-                aiTaskCreationResult.current = event.data.substring('task_creation_result: '.length);
+                const resultText = event.data.substring('task_creation_result: '.length);
+                aiTaskCreationResult.current = resultText;
+
+                // Final AI result should update UI immediately to avoid polling race conditions.
+                setAiReplyText(resultText || 'AI finished, but returned an empty result.');
+                if (isAiSubmittingRef.current) {
+                    stopAiSubmitting();
+                    enqueueSnackbar('AI has created tasks based on your description.', { variant: 'info' });
+                }
             }
         };
 
@@ -415,6 +518,63 @@ function MainCalendar() {
             clearWsReconnectingSnackbar();
             ws.current?.close();
             ws.current = null;
+        };
+    }, []);
+
+    useEffect(() => {
+        const appWindow = getCurrentWindow();
+        let unlisten: (() => void) | null = null;
+
+        const setupCloseHandler = async () => {
+            unlisten = await appWindow.onCloseRequested(async (event) => {
+                if (hasWindowDestroyBeenRequestedRef.current) {
+                    return;
+                }
+                if (isWindowCloseCleanupRunningRef.current) {
+                    event.preventDefault();
+                    return;
+                }
+
+                event.preventDefault();
+                isWindowCloseCleanupRunningRef.current = true;
+                isUnmountingRef.current = true;
+
+                await requestServerShutdown();
+
+                stopAiSubmitting();
+                clearWsDisconnectedSnackbar();
+                clearWsReconnectingSnackbar();
+
+                const socket = ws.current;
+                if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                    isManualWsCloseRef.current = true;
+                    socket.close(1000, 'Window closing');
+                }
+                ws.current = null;
+
+                hasWindowDestroyBeenRequestedRef.current = true;
+                try {
+                    await appWindow.close();
+                } catch (closeError) {
+                    console.error('appWindow.close failed during shutdown cleanup:', closeError);
+                    try {
+                        await appWindow.destroy();
+                    } catch (destroyError) {
+                        console.error('appWindow.destroy failed during shutdown cleanup:', destroyError);
+                        hasWindowDestroyBeenRequestedRef.current = false;
+                        isWindowCloseCleanupRunningRef.current = false;
+                        isUnmountingRef.current = false;
+                    }
+                }
+            });
+        };
+
+        void setupCloseHandler();
+
+        return () => {
+            if (unlisten) {
+                unlisten();
+            }
         };
     }, []);
 
@@ -848,6 +1008,16 @@ function MainCalendar() {
     const closeAiCreateModal = () => {
         if (!isAiModalOpen || isAiModalClosing) {
             return;
+        }
+
+        if (isAiSubmittingRef.current) {
+            const shouldCancelAndClose = window.confirm('AI is still processing your request. Cancel and close this window?');
+            if (!shouldCancelAndClose) {
+                return;
+            }
+
+            stopAiSubmitting({ closeConnection: true });
+            enqueueSnackbar('AI request canceled because the create window was closed.', { variant: 'default' });
         }
 
         setIsAiModalClosing(true);

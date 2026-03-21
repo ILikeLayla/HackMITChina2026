@@ -1,13 +1,23 @@
 from langchain.tools import tool
 from langchain.agents import create_agent
 from langchain.messages import SystemMessage, HumanMessage
-from langchain_ollama import ChatOllama
+
+import getpass
+import os
+
+if not os.getenv("DEEPSEEK_API_KEY"):
+    os.environ["DEEPSEEK_API_KEY"] = input("Enter your DeepSeek API key: ")
+
+
 import asyncio
 import websockets
 import json
 import logging
 import os
 import sys
+
+HEALTH_CHECK_HOST = "127.0.0.1"
+HEALTH_CHECK_PORT = 8766
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,8 +27,19 @@ logger = logging.getLogger("langchain-server")
 
 task_creation_results = asyncio.Queue()
 active_websocket = None
+allow_restart_on_disconnect = True
+shutdown_event = asyncio.Event()
 
-model = ChatOllama(model="gpt-oss:20b", temperature=0.7)
+from langchain_deepseek import ChatDeepSeek
+
+model = ChatDeepSeek(
+    model="deepseek-chat",
+    temperature=0,
+    max_tokens=None,
+    timeout=None,
+    max_retries=2,
+    # other params...
+)
 
 
 def restart_current_process(reason: str):
@@ -75,10 +96,10 @@ async def create_calendar_task(title: str, date: str, taskType: str, time: str, 
     
 @tool
 def get_time_now():
-    """Returns the current time in HH:MM format."""
+    """Returns the current time in YYYY-MM-DD HH:MM format."""
     from datetime import datetime
     now = datetime.now()
-    current_time = now.strftime("%H:%M")
+    current_time = now.strftime("%Y-%m-%d %H:%M")
     logger.info("get_time_now called, returning current time: %s", current_time)
     return current_time
 
@@ -122,17 +143,48 @@ async def handle_ai_request(websocket, task_info):
 
 async def listen(websocket):
     global active_websocket
+    global allow_restart_on_disconnect
     active_websocket = websocket
     background_tasks = set()
     logger.info("Client connected")
     try:
         async for message in websocket:
             logger.info("Incoming websocket message")
+            if message == "ping":
+                await websocket.send("pong")
+                continue
+            if message.startswith("ping: "):
+                ping_payload = message[len("ping: "):]
+                await websocket.send(f"pong: {ping_payload}")
+                continue
+            if message.startswith("ping_json: "):
+                raw_payload = message[len("ping_json: "):]
+                try:
+                    payload = json.loads(raw_payload)
+                except json.JSONDecodeError:
+                    await websocket.send("pong_json: {\"ok\": false, \"error\": \"invalid_json\"}")
+                    continue
+
+                response_payload = {
+                    "ok": True,
+                    "echo": payload,
+                }
+                await websocket.send(f"pong_json: {json.dumps(response_payload, ensure_ascii=False)}")
+                continue
             if message.startswith("ai_task_description: "):
                 task_info = message[len("ai_task_description: "):]
                 task = asyncio.create_task(handle_ai_request(websocket, task_info))
                 background_tasks.add(task)
                 task.add_done_callback(background_tasks.discard)
+            if message == "shutdown_server" or message.startswith("shutdown_server:"):
+                shutdown_reason = "client_request"
+                if message.startswith("shutdown_server:"):
+                    shutdown_reason = message[len("shutdown_server:"):].strip() or "client_request"
+                logger.info("Received graceful shutdown request (%s)", shutdown_reason)
+                allow_restart_on_disconnect = False
+                await websocket.send("shutdown_ack")
+                shutdown_event.set()
+                break
             if message.startswith("created_task: "):
                 await active_websocket.send("ack_created_task: Acknowledged task creation result")
                 result_info = message[len("created_task: "):]
@@ -147,15 +199,49 @@ async def listen(websocket):
         if active_websocket is websocket:
             active_websocket = None
         logger.info("Client disconnected")
-        restart_current_process("websocket client disconnected")
+        if allow_restart_on_disconnect:
+            restart_current_process("websocket client disconnected")
+        else:
+            logger.info("Graceful shutdown requested; skip restart")
+
+
+async def handle_health_check(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    try:
+        try:
+            await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=1.0)
+        except (asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            pass
+
+        body = b"ok"
+        response = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode("ascii")
+            + b"Connection: close\r\n\r\n"
+            + body
+        )
+        writer.write(response)
+        await writer.drain()
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 async def main():
     logger.info("Starting websocket server on 0.0.0.0:8765")
-    async with websockets.serve(listen, "0.0.0.0", 8765):
-        logger.info("Websocket server started; entering event loop")
-        await asyncio.Future()
+    logger.info("Starting health check server on %s:%s", HEALTH_CHECK_HOST, HEALTH_CHECK_PORT)
+    health_server = await asyncio.start_server(handle_health_check, HEALTH_CHECK_HOST, HEALTH_CHECK_PORT)
+    async with health_server, websockets.serve(listen, "0.0.0.0", 8765):
+        logger.info("Websocket server and health check server started; entering event loop")
+        await shutdown_event.wait()
+    logger.info("Websocket server shutdown complete")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    finally:
+        logger.info("Server process exiting")
+        # This helper process is dedicated to the websocket server; force exit
+        # so background library threads cannot keep it alive after shutdown.
+        os._exit(0)
