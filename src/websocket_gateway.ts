@@ -1012,8 +1012,23 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     aiRequestDeadlineRef.current = Date.now() + aiRequestTimeoutMs;
                 }
                 registerMutationForCurrentThread();
-                appendTaskEventMessageToActiveThread(
-                    `AI created ${createdTasks.length} task(s) in batch: ${createdTasks.map(t => t.title || '(untitled)').join(', ')}`,
+
+                const createdCards: AiTaskPreview[] = createdTasks.map(t => ({
+                    id: t.id,
+                    title: t.title,
+                    date: t.date,
+                    itemKind: t.itemKind,
+                    ddl: t.ddl,
+                    startTime: t.startTime,
+                    endTime: t.endTime,
+                    type: t.type,
+                    note: t.note,
+                }));
+                appendMessageToThread(
+                    pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,
+                    'system',
+                    `AI created ${createdTasks.length} task(s) in batch`,
+                    { taskCards: createdCards },
                 );
 
                 ws.current?.send(`batch_create_tasks_result: ${JSON.stringify({
@@ -1113,8 +1128,28 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                 const successCount = results.filter(r => r.ok).length;
                 if (successCount > 0) {
                     registerMutationForCurrentThread();
-                    appendTaskEventMessageToActiveThread(
+
+                    const updatedCards: AiTaskPreview[] = results
+                        .filter(r => r.ok && r.task)
+                        .map(r => {
+                            const t = r.task!;
+                            return {
+                                id: t.id,
+                                title: t.title,
+                                date: t.date,
+                                itemKind: t.itemKind,
+                                ddl: t.ddl,
+                                startTime: t.startTime,
+                                endTime: t.endTime,
+                                type: t.type,
+                                note: t.note,
+                            };
+                        });
+                    appendMessageToThread(
+                        pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,
+                        'system',
                         `AI updated ${successCount} task(s) in batch`,
+                        { taskCards: updatedCards },
                     );
                 }
                 if (isAiSubmittingRef.current) {

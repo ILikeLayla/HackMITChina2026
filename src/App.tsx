@@ -1392,6 +1392,7 @@ function MainCalendar() {
             '- Fetch calendar tasks/events yourself via the available tools before planning.',
             '- Call update_ai_progress at major milestones with meaningful status text.',
             '- You must actively re-plan and re-arrange tasks/events, not just analyze them.',
+            '- CRITICAL: To reschedule tasks, use update_calendar_schedule or batch_update_schedules to change dates/times IN PLACE. NEVER delete a task and recreate it — this loses the task id. Only delete when the user explicitly asks to remove an item.',
             '- Do not return an analysis-only response.',
             '- Produce a concrete revised schedule with specific task order and time blocks.',
             '- Prioritize urgent and high-impact work first.',

@@ -651,7 +651,8 @@ async def calendar_agent(user_message, current_thread_id, request_mode: str = "c
         "When deleting schedules, check if the schedule type associated with the item can be deleted (if it is not being used by any other items). "
         "Use update_ai_progress in all chats whenever the workflow has multiple steps, external tool calls, or may take noticeable time. "
         "Send concise milestone updates (about 3-6 per request), including a start update and a final completion update. "
-        "IMPORTANT: When creating, updating, or deleting multiple schedule items, ALWAYS use batch_create_schedules, batch_update_schedules, or batch_delete_schedules instead of calling the single-item tools in a loop. Batch tools are dramatically faster."
+        "IMPORTANT: When creating, updating, or deleting multiple schedule items, ALWAYS use batch_create_schedules, batch_update_schedules, or batch_delete_schedules instead of calling the single-item tools in a loop. Batch tools are dramatically faster. "
+        "CRITICAL: When rescheduling or reorganizing tasks, ALWAYS use update_calendar_schedule or batch_update_schedules to modify existing items in place. NEVER delete an existing task and recreate it — this loses the original task id and breaks references. Only use delete when the user explicitly asks to remove an item."
     )
 
     initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
