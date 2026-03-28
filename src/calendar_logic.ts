@@ -1,4 +1,4 @@
-import { parseTaskDate, type CalendarDay, type CalendarTask } from "./general_utils";
+import { getTaskSortTime, getTaskDisplayDate, parseTaskDate, type CalendarDay, type CalendarTask, type DeadlineMode } from "./general_utils";
 
 export const ADD_TYPE_OPTION_VALUE = '__add_new_type__';
 export const OTHER_TYPE = 'other';
@@ -49,12 +49,23 @@ export function filterAndSortTasks(
     filterType: string,
     filterKeyword: string,
     searchScope: SearchScope,
+    filterCommitment: string = 'all',
+    filterItemKind: string = 'all',
+    deadlineMode: DeadlineMode = 'actual',
 ) {
     const normalizedKeyword = filterKeyword.trim().toLowerCase();
 
     return [...tasks]
         .filter(task => {
             if (filterType !== 'all' && task.type !== filterType) {
+                return false;
+            }
+
+            if (filterCommitment !== 'all' && (task.commitmentCategory ?? 'undetermined') !== filterCommitment) {
+                return false;
+            }
+
+            if (filterItemKind !== 'all' && task.itemKind !== filterItemKind) {
                 return false;
             }
 
@@ -71,26 +82,29 @@ export function filterAndSortTasks(
             }
 
             if (searchScope === 'time') {
-                return task.time.toLowerCase().includes(normalizedKeyword);
+                const timeText = task.itemKind === 'event'
+                    ? `${task.startTime} ${task.endTime}`
+                    : `${task.ddl} ${task.virtualDeadlineDate} ${task.virtualDeadlineTime}`;
+                return timeText.toLowerCase().includes(normalizedKeyword);
             }
 
             if (searchScope === 'type') {
                 return task.type.toLowerCase().includes(normalizedKeyword);
             }
 
-            const keywordPool = `${task.title} ${task.note} ${task.time} ${task.type}`.toLowerCase();
+            const keywordPool = `${task.title} ${task.note} ${task.ddl} ${task.virtualDeadlineDate} ${task.virtualDeadlineTime} ${task.startTime} ${task.endTime} ${task.type} ${task.itemKind} ${task.commitmentCategory ?? ''}`.toLowerCase();
             return keywordPool.includes(normalizedKeyword);
         })
         .sort((a, b) => {
-            const dateA = parseTaskDate(a.date).getTime();
-            const dateB = parseTaskDate(b.date).getTime();
-            return dateA - dateB || a.time.localeCompare(b.time);
+            const dateA = parseTaskDate(getTaskDisplayDate(a, deadlineMode)).getTime();
+            const dateB = parseTaskDate(getTaskDisplayDate(b, deadlineMode)).getTime();
+            return dateA - dateB || getTaskSortTime(a, deadlineMode).localeCompare(getTaskSortTime(b, deadlineMode));
         });
 }
 
-export function getTasksForDayFromTasks(tasks: CalendarTask[], day: CalendarDay) {
+export function getTasksForDayFromTasks(tasks: CalendarTask[], day: CalendarDay, deadlineMode: DeadlineMode = 'actual') {
     return tasks.filter(task => {
-        const taskDate = parseTaskDate(task.date);
+        const taskDate = parseTaskDate(getTaskDisplayDate(task, deadlineMode));
         return (
             taskDate.getDate() === day.day &&
             taskDate.getMonth() === day.month &&
@@ -99,10 +113,10 @@ export function getTasksForDayFromTasks(tasks: CalendarTask[], day: CalendarDay)
     });
 }
 
-export function groupTasksByDate(tasks: CalendarTask[]) {
+export function groupTasksByDate(tasks: CalendarTask[], deadlineMode: DeadlineMode = 'actual') {
     return Object.entries(
         tasks.reduce((acc: Record<string, CalendarTask[]>, task) => {
-            const taskDate = parseTaskDate(task.date);
+            const taskDate = parseTaskDate(getTaskDisplayDate(task, deadlineMode));
             const key = `${taskDate.getFullYear()}-${taskDate.getMonth()}-${taskDate.getDate()}`;
             if (!acc[key]) {
                 acc[key] = [];

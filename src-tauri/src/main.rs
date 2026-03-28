@@ -8,6 +8,9 @@ use std::net::{SocketAddr, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(debug_assertions)]
+use dotenv;
+
 fn resolve_python_paths() -> (PathBuf, PathBuf) {
     let dev_base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -64,15 +67,6 @@ fn spawn_python_server() -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| format!("Failed to start Python server: {e}"));
     }
-
-    #[cfg(not(windows))]
-    {
-        Command::new(&python_exe)
-            .arg(&server_script)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("Failed to start Python server: {e}"))
-    }
 }
 
 fn wait_for_server_ready(timeout: Duration, poll_interval: Duration) -> bool {
@@ -106,6 +100,9 @@ fn wait_for_server_ready(timeout: Duration, poll_interval: Duration) -> bool {
 }
 
 fn main() {
+    #[cfg(debug_assertions)]
+    dotenv::dotenv().expect("Failed to load .env file");
+
     if let Err(err) = spawn_python_server() {
         eprintln!("{err}");
     } else {

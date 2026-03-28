@@ -1,22 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
+import "./styles/calendar-views.css";
+import "./styles/ai-chat.css";
+import "./styles/websocket-gateway.css";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
     defaultTypeColors,
+    loadGoogleEventTaskMapFromTempDb,
     loadTaskTypeColorsFromTempDb,
     loadTasksFromTempDb,
     loadTaskTypesFromTempDb,
+    saveGoogleEventTaskMapToTempDb,
     saveTaskTypeColorsToTempDb,
     saveTasksToTempDb,
     saveTaskTypesToTempDb,
 } from "./db_utils";
-import {
-    generateDayViewDOM,
-    generateListViewDOM,
-    generateMonthViewDOM,
-    generateWeekViewDOM,
-} from "./dom_generation";
+// import { migrateLocalStorageToFileStorage, clearLocalStorageData } from "./file_storage";
+import { DayView } from "./calendar_views/DayView";
+import { ListView } from "./calendar_views/ListView";
+import { MonthView } from "./calendar_views/MonthView";
+import { WeekView } from "./calendar_views/WeekView";
 import {
     ADD_TYPE_OPTION_VALUE,
     OTHER_TYPE,
@@ -38,46 +42,111 @@ import {
     buildDateString,
 } from "./calendar_logic";
 import {
+    getDefaultCommitmentCategoryForItemKind,
     generateCalendarDays,
     generateWeekDays,
     getDayTitle,
     getReadableTextColor,
     getWeekTitle,
     isValidHexColor,
-    parseTaskDate,
     type CalendarDay,
     type CalendarTask,
-    type TaskType,
+    type TaskCommitmentCategory,
+    type DeadlineMode,
 } from "./general_utils";
 import { SnackbarProvider, closeSnackbar, enqueueSnackbar } from 'notistack';
+import { AiChatSidebar, type AiChatRole, type AiChatThread, type AiTaskPreview, type AiThreadProgress } from "./ai_chat";
+import { TaskModal } from "./task_modal";
+import { TypeModal } from "./type_modal";
+import { HeaderControls } from "./header_controls";
+import {
+    buildTaskFromGoogleEvent,
+    type GoogleCalendarNormalizedEvent,
+} from "./google_calendar";
+import {
+    clearWsDisconnectedSnackbar as clearWsDisconnectedSnackbarRef,
+    clearWsReconnectingSnackbar as clearWsReconnectingSnackbarRef,
+    connectWebSocketGateway,
+    enqueueWsDisconnectedSnackbar as enqueueWsDisconnectedSnackbarRef,
+    requestServerShutdown as requestServerShutdownGateway,
+} from "./websocket_gateway";
 
-async function get_events() {
-    console.log(await invoke('get_events'));
-}
-
-const MODAL_CLOSE_ANIMATION_MS = 180;
 const FILTER_REFRESH_ANIMATION_MS = 180;
 const AI_REQUEST_TIMEOUT_MS = 180000;
+const GOOGLE_SYNC_TYPE = 'google';
+const GOOGLE_SYNC_TIMEOUT_MS = 120000;
+const DEFAULT_SOS_USER_PROMPT = 'Please automatically reorganize my most important tasks for today and the near term, prioritize urgent high-impact work, and give me an actionable finish plan.';
+
+interface GoogleCalendarSelectionItem {
+    id: string;
+    name: string;
+}
+
+interface GoogleCalendarSyncSession {
+    accessToken: string;
+    calendars: GoogleCalendarSelectionItem[];
+}
+
+interface SosPlannerDraft {
+    userPrompt: string;
+}
+
+interface PendingAiCalendarSnapshot {
+    tasks: CalendarTask[];
+    taskTypes: string[];
+    taskTypeColors: Record<string, string>;
+}
+
+type AiSubmitSource = 'chat' | 'sos';
+
+type StopAiSubmitReason = 'completed' | 'failed' | 'canceled' | 'interrupted';
 
 function MainCalendar() {
+    const createAiMessageId = () => `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const createAiThreadId = () => `thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const createDefaultAiThread = (): AiChatThread => ({
+        id: 'default_thread',
+        title: 'Default thread',
+        messages: [
+            {
+                id: createAiMessageId(),
+                role: 'assistant',
+                text: 'Hello! I can help you manage your calendar. Ask me to create, adjust, or summarize your schedule.',
+                createdAt: Date.now(),
+            },
+        ],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    });
+
+    const buildDefaultSosPlannerDraft = (): SosPlannerDraft => ({
+        userPrompt: DEFAULT_SOS_USER_PROMPT,
+    });
+
     const [currentDate, setCurrentDate] = useState(new Date());
     const [viewMode, setViewMode] = useState<ViewMode>('month');
     const [dateTransition, setDateTransition] = useState<DateTransitionState | null>(null);
     const [viewTransition, setViewTransition] = useState<ViewTransitionState | null>(null);
-    const [tasks, setTasks] = useState<CalendarTask[]>(() => loadTasksFromTempDb());
-    const [taskTypes, setTaskTypes] = useState<string[]>(() => loadTaskTypesFromTempDb());
-    const [taskTypeColors, setTaskTypeColors] = useState<Record<string, string>>(() => loadTaskTypeColorsFromTempDb(loadTaskTypesFromTempDb()));
+    const [tasks, setTasks] = useState<CalendarTask[]>([]);
+    const [taskTypes, setTaskTypes] = useState<string[]>(['other']);
+    const [taskTypeColors, setTaskTypeColors] = useState<Record<string, string>>(defaultTypeColors);
+    const [isDataLoaded, setIsDataLoaded] = useState(false);
     const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
     const [isCreatingTask, setIsCreatingTask] = useState(false);
     const [creatingTaskDate, setCreatingTaskDate] = useState(new Date());
     const [isTypeModalOpen, setIsTypeModalOpen] = useState(false);
-    const [isTaskModalClosing, setIsTaskModalClosing] = useState(false);
-    const [isTypeModalClosing, setIsTypeModalClosing] = useState(false);
+
     const [isAiModalOpen, setIsAiModalOpen] = useState(false);
-    const [isAiModalClosing, setIsAiModalClosing] = useState(false);
     const [isAiSubmitting, setIsAiSubmitting] = useState(false);
-    const [aiTaskDescription, setAiTaskDescription] = useState('');
-    const [aiReplyText, setAiReplyText] = useState('');
+    const [isSosModalOpen, setIsSosModalOpen] = useState(false);
+    const [sosPlannerDraft, setSosPlannerDraft] = useState<SosPlannerDraft>(() => buildDefaultSosPlannerDraft());
+    const [aiChatInput, setAiChatInput] = useState('');
+    const [aiThreads, setAiThreads] = useState<AiChatThread[]>(() => [createDefaultAiThread()]);
+    const [activeAiThreadId, setActiveAiThreadId] = useState('default_thread');
+    const [aiThreadProgressById, setAiThreadProgressById] = useState<Record<string, AiThreadProgress>>({});
+    const [hasPendingAiCalendarChanges, setHasPendingAiCalendarChanges] = useState(false);
+    const [pendingAiCalendarChangeCount, setPendingAiCalendarChangeCount] = useState(0);
+    const [pendingAiCalendarThreadId, setPendingAiCalendarThreadId] = useState<string | null>(null);
     const [typeModalMode, setTypeModalMode] = useState<'create' | 'edit'>('create');
     const [typeEditingOriginalName, setTypeEditingOriginalName] = useState<string | null>(null);
     const [typeDraftName, setTypeDraftName] = useState('');
@@ -85,6 +154,16 @@ function MainCalendar() {
     const [filterType, setFilterType] = useState<string>('all');
     const [filterKeyword, setFilterKeyword] = useState('');
     const [searchScope, setSearchScope] = useState<SearchScope>('all');
+    const [filterCommitment, setFilterCommitment] = useState<string>('all');
+    const [filterItemKind, setFilterItemKind] = useState<string>('all');
+    const [deadlineMode, setDeadlineMode] = useState<DeadlineMode>('actual');
+    const [isGoogleSyncing, setIsGoogleSyncing] = useState(false);
+    const [isGoogleCalendarPickerOpen, setIsGoogleCalendarPickerOpen] = useState(false);
+    const [googleCalendarOptions, setGoogleCalendarOptions] = useState<GoogleCalendarSelectionItem[]>([]);
+    const [selectedGoogleCalendarIds, setSelectedGoogleCalendarIds] = useState<string[]>([]);
+    const [googleSyncSession, setGoogleSyncSession] = useState<GoogleCalendarSyncSession | null>(null);
+    const [isAiGoogleClassifySidebarOpen, setIsAiGoogleClassifySidebarOpen] = useState(false);
+    const [aiGoogleClassifyEventCount, setAiGoogleClassifyEventCount] = useState(0);
     const [isHeaderToolsOpen, setIsHeaderToolsOpen] = useState(false);
     const [isFilterRefreshActive, setIsFilterRefreshActive] = useState(false);
     const [filtersButtonWidth, setFiltersButtonWidth] = useState<number | null>(null);
@@ -92,9 +171,7 @@ function MainCalendar() {
     const listScrollTargetRef = useRef<HTMLDivElement | null>(null);
     const dateTransitionTimerRef = useRef<number | null>(null);
     const viewTransitionTimerRef = useRef<number | null>(null);
-    const taskModalCloseTimerRef = useRef<number | null>(null);
-    const typeModalCloseTimerRef = useRef<number | null>(null);
-    const aiModalCloseTimerRef = useRef<number | null>(null);
+
     const filterRefreshTimerRef = useRef<number | null>(null);
     const filterRefreshRafRef = useRef<number | null>(null);
     const hasMountedFilterControlsRef = useRef(false);
@@ -105,24 +182,63 @@ function MainCalendar() {
 
     const ws = useRef<WebSocket | null>(null);
     const createdTaskAckResult = useRef<string | null>(null);
-    const aiTaskCreationResult = useRef<string | null>(null);
     const hasEverConnectedWsRef = useRef(false);
     const isUnmountingRef = useRef(false);
     const taskTypesRef = useRef(taskTypes);
+    const tasksRef = useRef(tasks);
+    const taskTypeColorsRef = useRef(taskTypeColors);
     const nextTaskIdRef = useRef(nextTaskId);
     const wsDisconnectedSnackbarIdRef = useRef<string | number | null>(null);
     const wsReconnectingSnackbarIdRef = useRef<string | number | null>(null);
-    const aiProcessingSnackbarIdRef = useRef<string | number | null>(null);
     const aiResultPollTimerRef = useRef<number | null>(null);
     const aiRequestDeadlineRef = useRef<number | null>(null);
+    const googleSyncSnackbarIdRef = useRef<string | number | null>(null);
+    const googleSyncCancelButtonIdRef = useRef<string | null>(null);
+    const googleSyncCountdownTimerRef = useRef<number | null>(null);
+    const googleSyncTimeoutTimerRef = useRef<number | null>(null);
+    const googleSyncRequestIdRef = useRef<string | null>(null);
+    const googleSyncAbortRejectRef = useRef<((error: Error) => void) | null>(null);
+    const googleSyncCanceledByUserRef = useRef(false);
+    const googleSyncTimedOutRef = useRef(false);
+    const activeAiThreadIdRef = useRef(activeAiThreadId);
+    const pendingAiRequestThreadIdRef = useRef<string | null>(null);
+    const pendingAiRequestSourceRef = useRef<AiSubmitSource | null>(null);
     const isManualWsCloseRef = useRef(false);
     const isAiSubmittingRef = useRef(false);
     const isWindowCloseCleanupRunningRef = useRef(false);
     const hasWindowDestroyBeenRequestedRef = useRef(false);
+    const aiMessagesEndRef = useRef<HTMLDivElement | null>(null);
+    const pendingAiCalendarSnapshotRef = useRef<PendingAiCalendarSnapshot | null>(null);
+    const aiCalendarStagingRef = useRef(false);
+    const hasPendingAiCalendarChangesRef = useRef(false);
+
+    type PreviousSidebarSnapshot = { kind: 'ai' } | { kind: 'sos' };
+    const previousSidebarRef = useRef<PreviousSidebarSnapshot | null>(null);
+
+    const cloneTasks = (source: CalendarTask[]) => source.map(task => ({ ...task }));
+    const cloneTaskTypes = (source: string[]) => [...source];
+    const cloneTaskTypeColors = (source: Record<string, string>) => ({ ...source });
 
     useEffect(() => {
+        if (aiCalendarStagingRef.current) {
+            return;
+        }
         taskTypesRef.current = taskTypes;
     }, [taskTypes]);
+
+    useEffect(() => {
+        if (aiCalendarStagingRef.current) {
+            return;
+        }
+        tasksRef.current = tasks;
+    }, [tasks]);
+
+    useEffect(() => {
+        if (aiCalendarStagingRef.current) {
+            return;
+        }
+        taskTypeColorsRef.current = taskTypeColors;
+    }, [taskTypeColors]);
 
     useEffect(() => {
         nextTaskIdRef.current = nextTaskId;
@@ -132,6 +248,127 @@ function MainCalendar() {
         isAiSubmittingRef.current = isAiSubmitting;
     }, [isAiSubmitting]);
 
+    useEffect(() => {
+        activeAiThreadIdRef.current = activeAiThreadId;
+    }, [activeAiThreadId]);
+
+    const createGoogleSyncRequestId = () => `google_sync_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const clearGoogleSyncCountdownTimer = () => {
+        if (googleSyncCountdownTimerRef.current !== null) {
+            window.clearInterval(googleSyncCountdownTimerRef.current);
+            googleSyncCountdownTimerRef.current = null;
+        }
+    };
+
+    const clearGoogleSyncTimeoutTimer = () => {
+        if (googleSyncTimeoutTimerRef.current !== null) {
+            window.clearTimeout(googleSyncTimeoutTimerRef.current);
+            googleSyncTimeoutTimerRef.current = null;
+        }
+    };
+
+    const closeGoogleSyncSnackbar = () => {
+        if (googleSyncSnackbarIdRef.current !== null) {
+            closeSnackbar(googleSyncSnackbarIdRef.current);
+            googleSyncSnackbarIdRef.current = null;
+        }
+        googleSyncCancelButtonIdRef.current = null;
+    };
+
+    const stopGoogleSyncProgressIndicators = () => {
+        clearGoogleSyncCountdownTimer();
+        clearGoogleSyncTimeoutTimer();
+        closeGoogleSyncSnackbar();
+    };
+
+    const triggerGoogleSyncAbort = (reason: Error) => {
+        const reject = googleSyncAbortRejectRef.current;
+        if (reject) {
+            googleSyncAbortRejectRef.current = null;
+            reject(reason);
+        }
+    };
+
+    const requestCancelGoogleSync = async (reason: 'user' | 'timeout') => {
+        const syncRequestId = googleSyncRequestIdRef.current;
+
+        if (reason === 'user') {
+            googleSyncCanceledByUserRef.current = true;
+        } else {
+            googleSyncTimedOutRef.current = true;
+        }
+
+        if (syncRequestId) {
+            try {
+                await invoke('cancel_google_calendar_sync', { syncRequestId });
+            } catch (cancelError) {
+                console.error('Failed to request Google sync cancellation:', cancelError);
+            }
+        }
+
+        triggerGoogleSyncAbort(
+            reason === 'user'
+                ? new Error('Google Calendar sync canceled by user.')
+                : new Error('Google Calendar sync timed out.'),
+        );
+    };
+
+    const updateGoogleSyncCancelButtonLabel = (remainingSeconds: number) => {
+        if (!googleSyncCancelButtonIdRef.current) {
+            return;
+        }
+
+        const buttonElement = document.getElementById(googleSyncCancelButtonIdRef.current);
+        if (buttonElement) {
+            buttonElement.textContent = `Cancel (${remainingSeconds}s)`;
+        }
+    };
+
+    const showGoogleSyncSnackbar = (initialRemainingSeconds: number) => {
+        closeGoogleSyncSnackbar();
+
+        const buttonId = `google-sync-cancel-btn-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        googleSyncCancelButtonIdRef.current = buttonId;
+
+        googleSyncSnackbarIdRef.current = enqueueSnackbar(
+            'Waiting for Google OAuth authorization...',
+            {
+                variant: 'info',
+                persist: true,
+                action: () => (
+                    <button
+                        id={buttonId}
+                        type="button"
+                        className="sync-snackbar-cancel-btn"
+                        onClick={() => {
+                            void requestCancelGoogleSync('user');
+                        }}
+                    >
+                        {`Cancel (${initialRemainingSeconds}s)`}
+                    </button>
+                ),
+            },
+        );
+    };
+
+    const startGoogleSyncProgressIndicators = () => {
+        const deadline = Date.now() + GOOGLE_SYNC_TIMEOUT_MS;
+        const getRemainingSeconds = () => Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+
+        showGoogleSyncSnackbar(getRemainingSeconds());
+
+        clearGoogleSyncCountdownTimer();
+        googleSyncCountdownTimerRef.current = window.setInterval(() => {
+            updateGoogleSyncCancelButtonLabel(getRemainingSeconds());
+        }, 1000);
+
+        clearGoogleSyncTimeoutTimer();
+        googleSyncTimeoutTimerRef.current = window.setTimeout(() => {
+            void requestCancelGoogleSync('timeout');
+        }, GOOGLE_SYNC_TIMEOUT_MS);
+    };
+
     const clearAiResultPollTimer = () => {
         if (aiResultPollTimerRef.current !== null) {
             window.clearTimeout(aiResultPollTimerRef.current);
@@ -139,18 +376,56 @@ function MainCalendar() {
         }
     };
 
-    const clearAiProcessingSnackbar = () => {
-        if (aiProcessingSnackbarIdRef.current !== null) {
-            closeSnackbar(aiProcessingSnackbarIdRef.current);
-            aiProcessingSnackbarIdRef.current = null;
-        }
+    const updateThreadProgress = (threadId: string, progress: AiThreadProgress) => {
+        setAiThreadProgressById(prev => ({
+            ...prev,
+            [threadId]: progress,
+        }));
     };
 
-    const stopAiSubmitting = (options?: { closeConnection?: boolean }) => {
+    const stopAiSubmitting = (options?: { closeConnection?: boolean; reason?: StopAiSubmitReason }) => {
+        const reason = options?.reason ?? 'interrupted';
+        const pendingThreadId = pendingAiRequestThreadIdRef.current;
+        const pendingSource = pendingAiRequestSourceRef.current;
+
         clearAiResultPollTimer();
-        clearAiProcessingSnackbar();
         aiRequestDeadlineRef.current = null;
+        pendingAiRequestThreadIdRef.current = null;
+        pendingAiRequestSourceRef.current = null;
         setIsAiSubmitting(false);
+
+        if (pendingThreadId) {
+            setAiThreadProgressById(prev => {
+                const existing = prev[pendingThreadId];
+                const basePercent = existing ? existing.percent : 0;
+                const isSos = pendingSource === 'sos';
+                const finalProgress: AiThreadProgress = {
+                    percent: reason === 'completed' ? 100 : Math.min(100, Math.max(8, basePercent)),
+                    status: isSos
+                        ? reason === 'completed'
+                            ? 'SOS plan ready. Continue chatting below to refine it.'
+                            : reason === 'canceled'
+                                ? 'SOS run canceled. You can restart from the SOS button anytime.'
+                                : reason === 'failed'
+                                    ? 'SOS run failed. Please adjust the range or try again.'
+                                    : 'SOS run interrupted.'
+                        : reason === 'completed'
+                            ? 'AI response ready. Continue chatting below to refine it.'
+                            : reason === 'canceled'
+                                ? 'AI request canceled.'
+                                : reason === 'failed'
+                                    ? 'AI request failed. Please try again.'
+                                    : 'AI request interrupted.',
+                    isActive: false,
+                    mode: pendingSource ?? 'chat',
+                };
+
+                return {
+                    ...prev,
+                    [pendingThreadId]: finalProgress,
+                };
+            });
+        }
 
         if (options?.closeConnection) {
             const socket = ws.current;
@@ -160,351 +435,224 @@ function MainCalendar() {
                 ws.current = null;
             }
         }
+
+        if (
+            reason !== 'interrupted'
+            && pendingAiCalendarSnapshotRef.current
+            && !hasPendingAiCalendarChangesRef.current
+        ) {
+            clearPendingAiCalendarChanges();
+        }
     };
 
-    const AiProcessingSnackbarContent = ({
-        timeoutMs,
-        deadlineRef,
-        onCancel,
-    }: {
-        timeoutMs: number;
-        deadlineRef: React.MutableRefObject<number | null>;
-        onCancel: () => void;
-    }) => {
-        const getRemainingSeconds = () => {
-            const deadline = deadlineRef.current;
-            if (deadline === null) {
-                return 0;
-            }
-            return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-        };
-        const [remainingSeconds, setRemainingSeconds] = useState(getRemainingSeconds);
+    const cancelActiveAiRequest = (reasonMessage: string) => {
+        if (!isAiSubmittingRef.current) {
+            return;
+        }
 
-        useEffect(() => {
-            const timerId = window.setInterval(() => {
-                setRemainingSeconds(getRemainingSeconds());
-            }, 250);
+        const pendingThreadId = pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current;
+        appendMessageToThread(pendingThreadId, 'system', reasonMessage);
+        stopAiSubmitting({ closeConnection: true, reason: 'canceled' });
+    };
 
-            return () => {
-                window.clearInterval(timerId);
-            };
-        }, [timeoutMs, deadlineRef]);
+    const appendMessageToThread = (
+        threadId: string,
+        role: AiChatRole,
+        text: string,
+        options?: { taskPreview?: AiTaskPreview; taskCards?: AiTaskPreview[] },
+    ) => {
+        const createdAt = Date.now();
+        setAiThreads(prev => prev.map(thread => (
+            thread.id === threadId
+                ? {
+                    ...thread,
+                    messages: [
+                        ...thread.messages,
+                        {
+                            id: createAiMessageId(),
+                            role,
+                            text,
+                            createdAt,
+                            ...(options?.taskPreview ? { taskPreview: options.taskPreview } : {}),
+                            ...(options?.taskCards ? { taskCards: options.taskCards } : {}),
+                        },
+                    ],
+                    updatedAt: createdAt,
+                }
+                : thread
+        )));
+    };
 
-        return (
-            <div className="snackbar-action-group">
-                <span className="snackbar-action-text">AI is processing your request... ({remainingSeconds}s)</span>
-                <button
-                    className="task-modal-btn snackbar-action-btn snackbar-action-btn-dismiss"
-                    onClick={onCancel}
-                >
-                    Cancel
-                </button>
-            </div>
+    const appendTaskEventMessageToActiveThread = (
+        message: string,
+        task?: CalendarTask,
+    ) => {
+        const targetThreadId = pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current;
+        appendMessageToThread(
+            targetThreadId,
+            'system',
+            message,
+            task
+                ? {
+                    taskPreview: {
+                        id: task.id,
+                        title: task.title,
+                        date: task.date,
+                        itemKind: task.itemKind,
+                        commitmentCategory: task.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(task.itemKind),
+                        ddl: task.ddl,
+                        startTime: task.startTime,
+                        endTime: task.endTime,
+                        type: task.type,
+                        note: task.note,
+                    },
+                }
+                : undefined,
         );
     };
 
-    const clearWsDisconnectedSnackbar = () => {
-        if (wsDisconnectedSnackbarIdRef.current !== null) {
-            closeSnackbar(wsDisconnectedSnackbarIdRef.current);
-            wsDisconnectedSnackbarIdRef.current = null;
+    const clearPendingAiCalendarChanges = () => {
+        pendingAiCalendarSnapshotRef.current = null;
+        aiCalendarStagingRef.current = false;
+        hasPendingAiCalendarChangesRef.current = false;
+        setHasPendingAiCalendarChanges(false);
+        setPendingAiCalendarChangeCount(0);
+        setPendingAiCalendarThreadId(null);
+    };
+
+    const ensurePendingAiCalendarSnapshot = () => {
+        if (pendingAiCalendarSnapshotRef.current) {
+            return;
         }
+
+        pendingAiCalendarSnapshotRef.current = {
+            tasks: cloneTasks(tasksRef.current),
+            taskTypes: cloneTaskTypes(taskTypesRef.current),
+            taskTypeColors: cloneTaskTypeColors(taskTypeColorsRef.current),
+        };
+        aiCalendarStagingRef.current = true;
+        hasPendingAiCalendarChangesRef.current = false;
+        setHasPendingAiCalendarChanges(false);
+        setPendingAiCalendarChangeCount(0);
+        setPendingAiCalendarThreadId(null);
+    };
+
+    const registerAiCalendarMutation = (threadId: string | null) => {
+        hasPendingAiCalendarChangesRef.current = true;
+        setHasPendingAiCalendarChanges(true);
+        setPendingAiCalendarChangeCount(prev => prev + 1);
+        if (threadId) {
+            setPendingAiCalendarThreadId(threadId);
+        }
+    };
+
+    const acceptPendingAiCalendarChanges = () => {
+        if (!pendingAiCalendarSnapshotRef.current || !hasPendingAiCalendarChanges) {
+            return;
+        }
+
+        setTasks(cloneTasks(tasksRef.current));
+        setTaskTypes(cloneTaskTypes(taskTypesRef.current));
+        setTaskTypeColors(cloneTaskTypeColors(taskTypeColorsRef.current));
+        clearPendingAiCalendarChanges();
+        enqueueSnackbar('Applied all pending AI calendar changes.', { variant: 'success' });
+    };
+
+    const discardPendingAiCalendarChanges = () => {
+        const snapshot = pendingAiCalendarSnapshotRef.current;
+        if (!snapshot) {
+            return;
+        }
+
+        const restoredTasks = cloneTasks(snapshot.tasks);
+        const restoredTaskTypes = cloneTaskTypes(snapshot.taskTypes);
+        const restoredTaskTypeColors = cloneTaskTypeColors(snapshot.taskTypeColors);
+
+        tasksRef.current = restoredTasks;
+        taskTypesRef.current = restoredTaskTypes;
+        taskTypeColorsRef.current = restoredTaskTypeColors;
+
+        setTasks(restoredTasks);
+        setTaskTypes(restoredTaskTypes);
+        setTaskTypeColors(restoredTaskTypeColors);
+
+        clearPendingAiCalendarChanges();
+        enqueueSnackbar('Discarded pending AI calendar changes.', { variant: 'info' });
+    };
+
+    const updateThreadTitleFromFirstUserMessage = (threadId: string, messageText: string) => {
+        const normalized = messageText.trim();
+        if (!normalized) {
+            return;
+        }
+
+        const nextTitle = normalized.length > 28 ? `${normalized.slice(0, 28)}...` : normalized;
+        setAiThreads(prev => prev.map(thread => {
+            if (thread.id !== threadId) {
+                return thread;
+            }
+            if (thread.title !== 'Default thread' && thread.title !== 'New thread') {
+                return thread;
+            }
+            return {
+                ...thread,
+                title: nextTitle,
+            };
+        }));
+    };
+
+
+    const clearWsDisconnectedSnackbar = () => {
+        clearWsDisconnectedSnackbarRef(wsDisconnectedSnackbarIdRef);
     };
 
     const clearWsReconnectingSnackbar = () => {
-        if (wsReconnectingSnackbarIdRef.current !== null) {
-            closeSnackbar(wsReconnectingSnackbarIdRef.current);
-            wsReconnectingSnackbarIdRef.current = null;
-        }
-    };
-
-    const enqueueWsReconnectingSnackbar = () => {
-        if (wsReconnectingSnackbarIdRef.current !== null) {
-            return;
-        }
-
-        const snackbarId = enqueueSnackbar('Reconnecting to AI service...', {
-            variant: 'info',
-            persist: true,
-            onClose: () => {
-                wsReconnectingSnackbarIdRef.current = null;
-            },
-        });
-
-        wsReconnectingSnackbarIdRef.current = snackbarId;
+        clearWsReconnectingSnackbarRef(wsReconnectingSnackbarIdRef);
     };
 
     const enqueueWsDisconnectedSnackbar = () => {
-        if (wsDisconnectedSnackbarIdRef.current !== null) {
-            return;
-        }
-
-        const snackbarId = enqueueSnackbar('WebSocket connection lost.', {
-            variant: 'warning',
-            persist: true,
-            action: (id) => (
-                <div className="snackbar-action-group">
-                    <button
-                        className="task-modal-btn snackbar-action-btn snackbar-action-btn-reconnect"
-                        onClick={() => {
-                            closeSnackbar(id);
-                            wsDisconnectedSnackbarIdRef.current = null;
-                            enqueueWsReconnectingSnackbar();
-                            connectWebSocket();
-                        }}
-                    >
-                        Reconnect
-                    </button>
-                    <button
-                        className="task-modal-btn snackbar-action-btn snackbar-action-btn-dismiss"
-                        onClick={() => {
-                            closeSnackbar(id);
-                            wsDisconnectedSnackbarIdRef.current = null;
-                        }}
-                    >
-                        Dismiss
-                    </button>
-                </div>
-            ),
-            onClose: () => {
-                wsDisconnectedSnackbarIdRef.current = null;
-            },
+        enqueueWsDisconnectedSnackbarRef({
+            wsDisconnectedSnackbarIdRef,
+            wsReconnectingSnackbarIdRef,
+            connectWebSocket,
         });
-
-        wsDisconnectedSnackbarIdRef.current = snackbarId;
     };
 
     const requestServerShutdown = async () => {
-        const sendShutdownWithAck = (socket: WebSocket, closeAfterAck: boolean) => {
-            return new Promise<boolean>((resolve) => {
-                let settled = false;
-
-                const finish = (ok: boolean) => {
-                    if (settled) {
-                        return;
-                    }
-                    settled = true;
-                    window.clearTimeout(timeoutId);
-                    socket.removeEventListener('message', handleAckMessage);
-                    socket.removeEventListener('close', handleSocketClose);
-                    socket.removeEventListener('error', handleSocketError);
-                    if (closeAfterAck) {
-                        try {
-                            socket.close(1000, 'shutdown ack handled');
-                        } catch {
-                            // ignore close errors on temp socket
-                        }
-                    }
-                    resolve(ok);
-                };
-
-                const handleAckMessage = (event: MessageEvent) => {
-                    if (event.data === 'shutdown_ack') {
-                        finish(true);
-                    }
-                };
-
-                const handleSocketClose = () => {
-                    finish(false);
-                };
-
-                const handleSocketError = () => {
-                    finish(false);
-                };
-
-                const timeoutId = window.setTimeout(() => {
-                    finish(false);
-                }, 3000);
-
-                socket.addEventListener('message', handleAckMessage);
-                socket.addEventListener('close', handleSocketClose);
-                socket.addEventListener('error', handleSocketError);
-
-                try {
-                    socket.send('shutdown_server:window_close');
-                } catch {
-                    finish(false);
-                }
-            });
-        };
-
-        const mainSocket = ws.current;
-        if (mainSocket && mainSocket.readyState === WebSocket.OPEN) {
-            const acknowledged = await sendShutdownWithAck(mainSocket, false);
-            if (acknowledged) {
-                return true;
-            }
-        }
-
-        const tempSocket = await new Promise<WebSocket | null>((resolve) => {
-            let done = false;
-            const socket = new WebSocket('ws://localhost:8765');
-
-            const finish = (result: WebSocket | null) => {
-                if (done) {
-                    return;
-                }
-                done = true;
-                window.clearTimeout(timeoutId);
-                socket.removeEventListener('open', handleOpen);
-                socket.removeEventListener('error', handleError);
-                resolve(result);
-            };
-
-            const handleOpen = () => finish(socket);
-            const handleError = () => finish(null);
-
-            const timeoutId = window.setTimeout(() => finish(null), 1500);
-            socket.addEventListener('open', handleOpen, { once: true });
-            socket.addEventListener('error', handleError, { once: true });
-        });
-
-        if (!tempSocket) {
-            return false;
-        }
-
-        return await sendShutdownWithAck(tempSocket, true);
+        return await requestServerShutdownGateway(ws);
     };
 
     const connectWebSocket = () => {
-        const existing = ws.current;
-        if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
-            return;
-        }
-
-        const socket = new WebSocket('ws://localhost:8765');
-        ws.current = socket;
-
-        const handleMessage = (event: MessageEvent) => {
-            console.log('Received message from WebSocket:', event.data);
-            // start with "newing_task: " followed by a date string in json format
-            if (typeof event.data === 'string' && event.data.startsWith('newing_task: ')) {
-                console.log('Handling newing_task message');
-                const task_info = JSON.parse(event.data.substring('newing_task: '.length));
-                const date = task_info.date ? new Date(task_info.date) : new Date();
-                const title = task_info.title || '';
-                // check if type is valid, otherwise create a new type with random color
-                let type = task_info.type || 'other';
-                if (!taskTypesRef.current.includes(type)) {
-                    const randomColor = `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`;
-                    setTaskTypes(prev => [...prev, type]);
-                    setTaskTypeColors(prev => ({
-                        ...prev,
-                        [type]: randomColor,
-                    }));
-                }
-
-                const time = task_info.time || '';
-                const note = task_info.note || '';
-                const computedTaskId = nextTaskIdRef.current;
-                nextTaskIdRef.current = computedTaskId + 1;
-                const newTask: CalendarTask = {
-                    id: computedTaskId,
-                    title,
-                    type,
-                    time,
-                    note,
-                    date: buildDateString(date),
-                };
-
-                setTasks(prev => [...prev, newTask]);
-                if (isAiSubmittingRef.current) {
-                    aiRequestDeadlineRef.current = Date.now() + AI_REQUEST_TIMEOUT_MS;
-                }
-                console.log('Created new task from WebSocket message:', newTask);
-                createdTaskAckResult.current = null;
-                ws.current?.send(`created_task: ${JSON.stringify(newTask)}`);
-                // disable the handler and listen for "Acknowledged task creation result" text in ws here, if not recieved within 1 second, resend. repeat 5 times.
-                let resendAttempts = 0;
-                const waitForAcknowledgement = () => {
-                    if (createdTaskAckResult.current === 'Acknowledged task creation result') {
-                        console.log('Received acknowledgement for task creation result');
-                        createdTaskAckResult.current = null;
-                        return;
-                    }
-                    if (resendAttempts >= 10) {
-                        console.warn('Did not receive acknowledgement for task creation result after 10 attempts, giving up');
-                        return;
-                    }
-                    resendAttempts++;
-                    console.warn(`Did not receive acknowledgement for task creation result, resending... (attempt ${resendAttempts})`);
-                    ws.current?.send(`created_task: ${JSON.stringify(newTask)}`);
-                    setTimeout(waitForAcknowledgement, 2000);
-                };
-                waitForAcknowledgement();
-                enqueueSnackbar('AI created a new task: ' + title, { variant: 'success' });
-            } 
-
-            if (typeof event.data === 'string' && event.data.startsWith('ack_created_task: ')) {
-                console.log('Handling ack_created_task message');
-                createdTaskAckResult.current = event.data.substring('ack_created_task: '.length);
-            }
-
-            if (typeof event.data === 'string' && event.data.startsWith('task_creation_result: ')) {
-                console.log('Handling task_creation_result message');
-                const resultText = event.data.substring('task_creation_result: '.length);
-                aiTaskCreationResult.current = resultText;
-
-                // Final AI result should update UI immediately to avoid polling race conditions.
-                setAiReplyText(resultText || 'AI finished, but returned an empty result.');
-                if (isAiSubmittingRef.current) {
-                    stopAiSubmitting();
-                    enqueueSnackbar('AI has created tasks based on your description.', { variant: 'info' });
-                }
-            }
-        };
-
-        const handleOpen = () => {
-            hasEverConnectedWsRef.current = true;
-            clearWsDisconnectedSnackbar();
-            clearWsReconnectingSnackbar();
-            enqueueSnackbar('AI service connected.', { variant: 'success' });
-        };
-
-        const handleClose = () => {
-            const wasManualClose = isManualWsCloseRef.current;
-            if (wasManualClose) {
-                isManualWsCloseRef.current = false;
-            }
-
-            if (ws.current === socket) {
-                ws.current = null;
-            }
-
-            clearWsReconnectingSnackbar();
-
-            if (wasManualClose) {
-                if (!isUnmountingRef.current) {
-                    enqueueSnackbar('Connection closed.', { variant: 'default' });
-                    connectWebSocket();
-                }
-                return;
-            }
-
-            if (isAiSubmittingRef.current) {
-                stopAiSubmitting();
-                enqueueSnackbar('Connection lost while waiting for AI response.', { variant: 'warning' });
-            }
-
-            if (!isUnmountingRef.current) {
-                enqueueWsDisconnectedSnackbar();
-            }
-        };
-
-        const handleError = () => {
-            clearWsReconnectingSnackbar();
-            if (isAiSubmittingRef.current) {
-                stopAiSubmitting();
-                enqueueSnackbar('Connection error while waiting for AI response.', { variant: 'warning' });
-            }
-            if (!isUnmountingRef.current) {
-                enqueueWsDisconnectedSnackbar();
-            }
-        };
-
-        socket.addEventListener('message', handleMessage);
-        socket.addEventListener('open', handleOpen);
-        socket.addEventListener('close', handleClose);
-        socket.addEventListener('error', handleError);
+        connectWebSocketGateway({
+            ws,
+            createdTaskAckResult,
+            hasEverConnectedWsRef,
+            isUnmountingRef,
+            taskTypesRef,
+            tasksRef,
+            taskTypeColorsRef,
+            nextTaskIdRef,
+            wsDisconnectedSnackbarIdRef,
+            wsReconnectingSnackbarIdRef,
+            aiRequestDeadlineRef,
+            pendingAiRequestThreadIdRef,
+            activeAiThreadIdRef,
+            isManualWsCloseRef,
+            isAiSubmittingRef,
+            setTaskTypes,
+            setTasks,
+            setTaskTypeColors,
+            setModalDraft,
+            setFilterType,
+            aiCalendarStagingRef,
+            registerAiCalendarMutation,
+            setAiThreadProgress: updateThreadProgress,
+            stopAiSubmitting,
+            connectWebSocket,
+            appendMessageToThread,
+            appendTaskEventMessageToActiveThread,
+            aiRequestTimeoutMs: AI_REQUEST_TIMEOUT_MS,
+        });
     };
 
     useEffect(() => {
@@ -513,7 +661,10 @@ function MainCalendar() {
 
         return () => {
             isUnmountingRef.current = true;
-            stopAiSubmitting();
+            stopAiSubmitting({ reason: 'interrupted' });
+            stopGoogleSyncProgressIndicators();
+            googleSyncRequestIdRef.current = null;
+            googleSyncAbortRejectRef.current = null;
             clearWsDisconnectedSnackbar();
             clearWsReconnectingSnackbar();
             ws.current?.close();
@@ -541,7 +692,7 @@ function MainCalendar() {
 
                 await requestServerShutdown();
 
-                stopAiSubmitting();
+                stopAiSubmitting({ reason: 'interrupted' });
                 clearWsDisconnectedSnackbar();
                 clearWsReconnectingSnackbar();
 
@@ -596,26 +747,7 @@ function MainCalendar() {
         setViewTransition(null);
     };
 
-    const clearTaskModalCloseTimer = () => {
-        if (taskModalCloseTimerRef.current !== null) {
-            window.clearTimeout(taskModalCloseTimerRef.current);
-            taskModalCloseTimerRef.current = null;
-        }
-    };
 
-    const clearTypeModalCloseTimer = () => {
-        if (typeModalCloseTimerRef.current !== null) {
-            window.clearTimeout(typeModalCloseTimerRef.current);
-            typeModalCloseTimerRef.current = null;
-        }
-    };
-
-    const clearAiModalCloseTimer = () => {
-        if (aiModalCloseTimerRef.current !== null) {
-            window.clearTimeout(aiModalCloseTimerRef.current);
-            aiModalCloseTimerRef.current = null;
-        }
-    };
 
     const clearFilterRefreshAnimation = () => {
         if (filterRefreshTimerRef.current !== null) {
@@ -688,6 +820,23 @@ function MainCalendar() {
         startDateTransition(targetDate, direction);
     };
 
+    const handleJumpToDate = (targetDate: Date) => {
+        if (viewTransition) {
+            return;
+        }
+
+        if (viewMode !== 'list' && dateTransition) {
+            return;
+        }
+
+        if (isSameDay(currentDate, targetDate)) {
+            return;
+        }
+
+        const direction: DateTransitionDirection = targetDate.getTime() >= currentDate.getTime() ? 'forward' : 'backward';
+        startDateTransition(targetDate, direction);
+    };
+
     const handleViewChange = (mode: ViewMode) => {
         if (mode === viewMode || viewTransition) {
             return;
@@ -713,38 +862,85 @@ function MainCalendar() {
     };
 
     useEffect(() => {
-        void get_events();
-    }, []);
-
-    useEffect(() => {
         return () => {
             if (dateTransitionTimerRef.current !== null) {
                 window.clearTimeout(dateTransitionTimerRef.current);
             }
 
             cancelViewTransition();
-            clearTaskModalCloseTimer();
-            clearTypeModalCloseTimer();
-            clearAiModalCloseTimer();
             clearFilterRefreshAnimation();
+            stopGoogleSyncProgressIndicators();
         };
     }, []);
 
     useEffect(() => {
-        cancelDateTransition();
-    }, [viewMode]);
+        if (isDataLoaded) {
+            return;
+        }
+
+        let isMounted = true;
+
+        const loadData = async () => {
+            try {
+                // const migrationResult = await migrateLocalStorageToFileStorage();
+                // if (migrationResult.success && migrationResult.migratedKeys.length > 0) {
+                //     console.log('[Migration] Successfully migrated keys:', migrationResult.migratedKeys);
+                // } else if (migrationResult.errors.length > 0) {
+                //     console.error('[Migration] Migration errors:', migrationResult.errors);
+                // }
+
+                if (!isMounted) {
+                    return;
+                }
+
+                const loadedTypes = await loadTaskTypesFromTempDb();
+                const loadedColors = await loadTaskTypeColorsFromTempDb(loadedTypes);
+                const loadedTasks = await loadTasksFromTempDb();
+
+                setTaskTypes(loadedTypes);
+                setTaskTypeColors(loadedColors);
+                setTasks(loadedTasks);
+                setIsDataLoaded(true);
+
+                // if (migrationResult.success && migrationResult.migratedKeys.length > 0) {
+                //     clearLocalStorageData();
+                //     console.log('[Migration] LocalStorage data cleared after successful migration.');
+                // }
+            } catch (error) {
+                console.error('[App] Failed to load data:', error);
+                if (isMounted) {
+                    setIsDataLoaded(true);
+                }
+            }
+        };
+
+        void loadData();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [isDataLoaded]);
 
     useEffect(() => {
-        saveTasksToTempDb(tasks);
-    }, [tasks]);
+        if (!isDataLoaded) {
+            return;
+        }
+        void saveTasksToTempDb(tasks);
+    }, [tasks, isDataLoaded]);
 
     useEffect(() => {
-        saveTaskTypesToTempDb(taskTypes);
-    }, [taskTypes]);
+        if (!isDataLoaded) {
+            return;
+        }
+        void saveTaskTypesToTempDb(taskTypes);
+    }, [taskTypes, isDataLoaded]);
 
     useEffect(() => {
-        saveTaskTypeColorsToTempDb(taskTypeColors);
-    }, [taskTypeColors]);
+        if (!isDataLoaded) {
+            return;
+        }
+        void saveTaskTypeColorsToTempDb(taskTypeColors);
+    }, [taskTypeColors, isDataLoaded]);
 
     useEffect(() => {
         if (!filtersButtonMeasureRef.current) {
@@ -772,53 +968,111 @@ function MainCalendar() {
             }, FILTER_REFRESH_ANIMATION_MS);
             filterRefreshRafRef.current = null;
         });
-    }, [filterType, filterKeyword, searchScope]);
+    }, [filterType, filterKeyword, searchScope, filterCommitment, filterItemKind]);
 
     const renderViewContent = (mode: ViewMode, displayDate: Date) => {
         if (mode === 'list') {
-            return generateListViewDOM({
-                listTaskGroups,
-                listScrollTargetRef,
-                getTaskStyle,
-                openTaskModal,
-            });
+            return (
+                <ListView
+                    listTaskGroups={listTaskGroups}
+                    listScrollTargetRef={listScrollTargetRef}
+                    getTaskStyle={getTaskStyle}
+                    openTaskModal={openTaskModal}
+                    deadlineMode={deadlineMode}
+                />
+            );
         }
 
         if (mode === 'day') {
-            return generateDayViewDOM({
-                currentDate: displayDate,
-                getTasksForDay,
-                getTaskStyle,
-                openTaskModal,
-            });
+            return (
+                <DayView
+                    currentDate={displayDate}
+                    getTasksForDay={getTasksForDay}
+                    getTaskStyle={getTaskStyle}
+                    openTaskModal={openTaskModal}
+                    deadlineMode={deadlineMode}
+                />
+            );
         }
 
         if (mode === 'week') {
-            return generateWeekViewDOM({
-                weekDays: generateWeekDays(displayDate),
-                getTasksForDay,
-                getTaskStyle,
-                openTaskModal,
-                handleDayClick,
-            });
+            return (
+                <WeekView
+                    weekDays={generateWeekDays(displayDate)}
+                    getTasksForDay={getTasksForDay}
+                    getTaskStyle={getTaskStyle}
+                    openTaskModal={openTaskModal}
+                    handleDayClick={handleDayClick}
+                    deadlineMode={deadlineMode}
+                />
+            );
         }
 
-        return generateMonthViewDOM({
-            calendarDays: generateCalendarDays(displayDate),
-            getTasksForDay,
-            getTaskStyle,
-            openTaskModal,
-            handleDayClick,
-        });
+        return (
+            <MonthView
+                calendarDays={generateCalendarDays(displayDate)}
+                getTasksForDay={getTasksForDay}
+                getTaskStyle={getTaskStyle}
+                openTaskModal={openTaskModal}
+                handleDayClick={handleDayClick}
+                deadlineMode={deadlineMode}
+            />
+        );
     };
 
-    const filteredAndSortedTasks = filterAndSortTasks(tasks, filterType, filterKeyword, searchScope);
+    const displayTasks = (() => {
+        const snapshot = pendingAiCalendarSnapshotRef.current;
+        if (!snapshot || !hasPendingAiCalendarChanges) {
+            return tasks;
+        }
+
+        const snapshotById = new Map(snapshot.tasks.map(t => [t.id, t]));
+        const stagedById = new Map(tasksRef.current.map(t => [t.id, t]));
+
+        const result: CalendarTask[] = [];
+
+        for (const task of tasksRef.current) {
+            const original = snapshotById.get(task.id);
+            if (!original) {
+                result.push({ ...task, _aiPreviewStatus: 'ai-preview-new' });
+            } else {
+                const changed =
+                    original.title !== task.title ||
+                    original.date !== task.date ||
+                    original.type !== task.type ||
+                    original.itemKind !== task.itemKind ||
+                    original.ddl !== task.ddl ||
+                    original.startTime !== task.startTime ||
+                    original.endTime !== task.endTime ||
+                    original.note !== task.note;
+                if (changed) {
+                    result.push({ ...task, _aiPreviewStatus: 'ai-preview-modified' });
+                } else {
+                    result.push(task);
+                }
+            }
+        }
+
+        for (const task of snapshot.tasks) {
+            if (!stagedById.has(task.id)) {
+                result.push({ ...task, _aiPreviewStatus: 'ai-preview-deleted' });
+            }
+        }
+
+        return result;
+    })();
+
+    const displayTaskTypeColors = hasPendingAiCalendarChanges && pendingAiCalendarSnapshotRef.current
+        ? { ...taskTypeColors, ...taskTypeColorsRef.current }
+        : taskTypeColors;
+
+    const filteredAndSortedTasks = filterAndSortTasks(displayTasks, filterType, filterKeyword, searchScope, filterCommitment, filterItemKind, deadlineMode);
 
     const getTasksForDay = (day: CalendarDay) => {
-        return getTasksForDayFromTasks(filteredAndSortedTasks, day);
+        return getTasksForDayFromTasks(filteredAndSortedTasks, day, deadlineMode);
     };
 
-    const listTaskGroups = groupTasksByDate(filteredAndSortedTasks);
+    const listTaskGroups = groupTasksByDate(filteredAndSortedTasks, deadlineMode);
 
     useEffect(() => {
         if (viewMode !== 'list') {
@@ -919,25 +1173,83 @@ function MainCalendar() {
         return () => {
             cleanups.forEach(cleanup => cleanup());
         };
-    }, [viewMode, dateTransition, viewTransition, tasks, filterType, filterKeyword, searchScope]);
+    }, [viewMode, dateTransition, viewTransition, tasks, filterType, filterKeyword, searchScope, filterCommitment, filterItemKind]);
+
+    const captureCurrentSidebar = () => {
+        if (isAiModalOpen) {
+            previousSidebarRef.current = { kind: 'ai' };
+        } else if (isSosModalOpen) {
+            previousSidebarRef.current = { kind: 'sos' };
+        } else {
+            previousSidebarRef.current = null;
+        }
+    };
+
+    const restorePreviousSidebar = () => {
+        const prev = previousSidebarRef.current;
+        previousSidebarRef.current = null;
+        if (!prev) return;
+        if (prev.kind === 'ai') {
+            setIsAiModalOpen(true);
+        } else if (prev.kind === 'sos') {
+            setIsSosModalOpen(true);
+        }
+    };
+
+    const closePanelSidebars = () => {
+        setModalDraft(null);
+        setSelectedTaskId(null);
+        setIsCreatingTask(false);
+        setIsTypeModalOpen(false);
+        setIsGoogleCalendarPickerOpen(false);
+    };
+
+    const closeOverlaySidebars = () => {
+        setIsAiModalOpen(false);
+        setIsSosModalOpen(false);
+    };
 
     const openTaskModal = (task: CalendarTask) => {
-        clearTaskModalCloseTimer();
-        setIsTaskModalClosing(false);
+        captureCurrentSidebar();
+        closeOverlaySidebars();
         setIsCreatingTask(false);
         setSelectedTaskId(task.id);
         setModalDraft({
             title: task.title,
             type: task.type,
-            time: task.time,
+            itemKind: task.itemKind,
+            commitmentCategory: task.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(task.itemKind),
+            ddl: task.ddl,
+            virtualDeadlineDate: task.virtualDeadlineDate,
+            virtualDeadlineTime: task.virtualDeadlineTime,
+            startTime: task.startTime,
+            endTime: task.endTime,
             note: task.note,
         });
     };
 
+    const openTaskModalFromPreview = (preview: AiTaskPreview) => {
+        openTaskModal({
+            id: preview.id,
+            title: preview.title,
+            date: preview.date,
+            itemKind: preview.itemKind,
+            commitmentCategory: preview.commitmentCategory,
+            ddl: preview.ddl,
+            virtualDeadlineDate: preview.date,
+            virtualDeadlineTime: preview.ddl,
+            startTime: preview.startTime,
+            endTime: preview.endTime,
+            type: preview.type,
+            note: preview.note,
+        });
+    };
+
     const openCreateTaskModal = (date: Date) => {
-        clearTaskModalCloseTimer();
-        setIsTaskModalClosing(false);
+        captureCurrentSidebar();
+        closeOverlaySidebars();
         const defaultType = taskTypes[0] ?? 'work';
+        const dateStr = buildDateString(date);
         setIsCreatingTask(true);
         setSelectedTaskId(null);
         console.log('Creating task for date:', date);
@@ -945,7 +1257,13 @@ function MainCalendar() {
         setModalDraft({
             title: '',
             type: defaultType,
-            time: '09:00',
+            itemKind: 'task',
+            commitmentCategory: 'flexible_work',
+            ddl: '09:00',
+            virtualDeadlineDate: dateStr,
+            virtualDeadlineTime: '09:00',
+            startTime: '09:00',
+            endTime: '10:00',
             note: '',
         });
     };
@@ -958,55 +1276,243 @@ function MainCalendar() {
     };
 
     const closeTypeModal = () => {
-        if (!isTypeModalOpen || isTypeModalClosing) {
-            return;
-        }
-
-        setIsTypeModalClosing(true);
-        clearTypeModalCloseTimer();
-        typeModalCloseTimerRef.current = window.setTimeout(() => {
-            setIsTypeModalOpen(false);
-            setIsTypeModalClosing(false);
-            resetTypeModalState();
-            typeModalCloseTimerRef.current = null;
-        }, MODAL_CLOSE_ANIMATION_MS);
+        setIsTypeModalOpen(false);
+        resetTypeModalState();
     };
 
-    const closeTaskModal = () => {
-        if (!modalDraft || isTaskModalClosing) {
-            return;
-        }
-
+    const closeTaskModal = (opts: { skipRestore?: boolean } = {}) => {
         if (isTypeModalOpen) {
             closeTypeModal();
         }
-
-        setIsTaskModalClosing(true);
-        clearTaskModalCloseTimer();
-        taskModalCloseTimerRef.current = window.setTimeout(() => {
-            clearTypeModalCloseTimer();
-            setSelectedTaskId(null);
-            setIsCreatingTask(false);
-            setModalDraft(null);
-            setIsTaskModalClosing(false);
-            setIsTypeModalOpen(false);
-            setIsTypeModalClosing(false);
-            resetTypeModalState();
-            taskModalCloseTimerRef.current = null;
-        }, MODAL_CLOSE_ANIMATION_MS);
+        setSelectedTaskId(null);
+        setIsCreatingTask(false);
+        setModalDraft(null);
+        if (!opts.skipRestore) {
+            restorePreviousSidebar();
+        }
     };
 
     const openAiCreateModal = () => {
-        clearAiModalCloseTimer();
-        setIsAiModalClosing(false);
+        if (isAiModalOpen) {
+            closeAiCreateModal();
+            return;
+        }
+        captureCurrentSidebar();
+        closePanelSidebars();
+        setIsSosModalOpen(false);
         setIsAiModalOpen(true);
-        setIsAiSubmitting(false);
-        setAiTaskDescription('');
-        setAiReplyText('');
+        setAiChatInput('');
+    };
+
+    const openSosPlannerModal = () => {
+        if (isSosModalOpen) {
+            closeSosPlannerModal();
+            return;
+        }
+        captureCurrentSidebar();
+        closePanelSidebars();
+        setIsAiModalOpen(false);
+        setSosPlannerDraft(prev => ({
+            userPrompt: prev.userPrompt.trim() ? prev.userPrompt : DEFAULT_SOS_USER_PROMPT,
+        }));
+        setIsSosModalOpen(true);
+    };
+
+    const closeSosPlannerModal = (opts: { skipRestore?: boolean } = {}) => {
+        setIsSosModalOpen(false);
+        if (!opts.skipRestore) {
+            restorePreviousSidebar();
+        }
+    };
+
+    const sendAiRequest = (options: {
+        threadId: string;
+        userInput: string;
+        source: AiSubmitSource;
+    }) => {
+        const { threadId, userInput, source } = options;
+        setIsAiSubmitting(true);
+        pendingAiRequestThreadIdRef.current = threadId;
+        pendingAiRequestSourceRef.current = source;
+
+        const timeoutMs = AI_REQUEST_TIMEOUT_MS;
+        aiRequestDeadlineRef.current = Date.now() + timeoutMs;
+
+        updateThreadProgress(threadId, {
+            percent: 0,
+            status: 'Waiting for AI progress updates...',
+            isActive: true,
+            mode: source,
+        });
+
+        if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+            appendMessageToThread(threadId, 'system', 'Unable to send because AI service is disconnected.');
+            stopAiSubmitting({ reason: 'failed' });
+            enqueueWsDisconnectedSnackbar();
+            return;
+        }
+
+        ensurePendingAiCalendarSnapshot();
+
+        ws.current?.send(`ai_message: ${JSON.stringify({
+            message: userInput,
+            thread_id: threadId,
+            source,
+        })}`);
+
+        aiResultPollTimerRef.current = window.setTimeout(() => {
+            if (!isAiSubmittingRef.current) {
+                return;
+            }
+
+            if (aiRequestDeadlineRef.current !== null && Date.now() > aiRequestDeadlineRef.current) {
+                appendMessageToThread(threadId, 'system', 'AI response timed out. Please try again.');
+                stopAiSubmitting({ reason: 'failed' });
+            }
+        }, timeoutMs + 50);
+    };
+
+    const runSosPlannerWithDraft = (draft: SosPlannerDraft) => {
+        if (isAiSubmittingRef.current) {
+            enqueueSnackbar('Please wait for the current AI request to finish.', { variant: 'info' });
+            return;
+        }
+
+        const userIntent = draft.userPrompt.trim() || DEFAULT_SOS_USER_PROMPT;
+
+        const threadId = createAiThreadId();
+        const now = Date.now();
+        const titleSnippet = userIntent.length > 18 ? `${userIntent.slice(0, 18)}...` : userIntent;
+        const title = `SOS ${titleSnippet}`;
+        const sosPrompt = [
+            'SOS MODE: I need an emergency schedule rescue.',
+            `User intent: ${userIntent}`,
+            '',
+            'Rules:',
+            '- Fetch calendar tasks/events yourself via the available tools before planning.',
+            '- Call update_ai_progress at major milestones with meaningful status text.',
+            '- You must actively re-plan and re-arrange tasks/events, not just analyze them.',
+            '- CRITICAL: To reschedule tasks, use update_calendar_schedule or batch_update_schedules to change dates/times IN PLACE. NEVER delete a task and recreate it — this loses the task id. Only delete when the user explicitly asks to remove an item.',
+            '- Do not return an analysis-only response.',
+            '- Produce a concrete revised schedule with specific task order and time blocks.',
+            '- Prioritize urgent and high-impact work first.',
+            '- Resolve conflicts and provide realistic buffers.',
+            '- Items marked as hard_commitment (meetings, fixed appointments, deadlines) are NON-NEGOTIABLE — never reschedule or remove them.',
+            '- Items marked as flexible_work (self-directed tasks, personal projects, errands) are the primary candidates for rescheduling, deferral, or reordering.',
+            '- Items marked as undetermined may be treated as flexible_work for re-planning purposes.',
+            '- When rescheduling undetermined items, you may set their commitmentCategory to a more specific value if the intent is clear.',
+            '- When rescheduling, always preserve the commitmentCategory of each item unchanged.',
+            '- Return a concise completion analysis with checkpoints, order, and estimated finish times.',
+            '- Use markdown headings and a numbered action analysis.',
+        ].join('\n');
+
+        const newThread: AiChatThread = {
+            id: threadId,
+            title,
+            messages: [
+                {
+                    id: createAiMessageId(),
+                    role: 'assistant',
+                    text: 'SOS planner started. I will rearrange your schedule based on your sentence and return an executable finish plan.',
+                    createdAt: now,
+                },
+                {
+                    id: createAiMessageId(),
+                    role: 'user',
+                    text: sosPrompt,
+                    createdAt: now + 1,
+                },
+            ],
+            createdAt: now,
+            updatedAt: now + 1,
+        };
+
+        setAiThreads(prev => [newThread, ...prev]);
+        setActiveAiThreadId(threadId);
+        closeSosPlannerModal({ skipRestore: true });
+
+        setIsAiModalOpen(true);
+        setAiChatInput('');
+
+        sendAiRequest({
+            threadId,
+            userInput: sosPrompt,
+            source: 'sos',
+        });
+    };
+
+    const runSosPlanner = () => {
+        runSosPlannerWithDraft(sosPlannerDraft);
+    };
+
+    const openAiGoogleClassifySidebar = (count: number) => {
+        setAiGoogleClassifyEventCount(count);
+        setIsAiGoogleClassifySidebarOpen(true);
+    };
+
+    const closeAiGoogleClassifySidebar = () => {
+        setIsAiGoogleClassifySidebarOpen(false);
+    };
+
+    const runAiGoogleClassify = () => {
+        closeAiGoogleClassifySidebar();
+        if (isAiSubmittingRef.current) {
+            enqueueSnackbar('Please wait for the current AI request to finish.', { variant: 'info' });
+            return;
+        }
+
+        const threadId = createAiThreadId();
+        const now = Date.now();
+        const count = aiGoogleClassifyEventCount;
+        const classifyPrompt = [
+            `GOOGLE CALENDAR IMPORT CLASSIFICATION: ${count} event(s) were just imported from Google Calendar with type 'google'. Please:`,
+            '',
+            '1. Fetch all current tasks and existing type colors using get_all_tasks and get_all_task_type_colors.',
+            '2. Analyze ALL tasks with type="google" together. Group them into logical types (e.g., "meeting", "lunch", "workout", "travel", "personal"). Reuse an existing type if it fits; otherwise plan to create a new one.',
+            '3. For each NEW type that does not already exist, call update_task_type_color to register it with a fitting, distinct hex color BEFORE assigning any tasks to it.',
+            '4. Now update each imported task using update_calendar_task with:',
+            '   - The determined type (which now definitely exists in the system).',
+            '   - The commitment category: "hard_commitment" for fixed obligations (meetings, appointments, deadlines), "flexible_work" for self-directed or flexible activities, "undetermined" only if genuinely unclear.',
+            '   - Do NOT change the itemKind field (event/task) — leave it exactly as it is.',
+            '5. Call update_ai_progress at major milestones (start, after analysis, after type creation, after updates, on completion).',
+            '6. Provide a brief summary of new types created and how events were classified.',
+        ].join('\n');
+
+        const newThread: AiChatThread = {
+            id: threadId,
+            title: `Classify ${count} Google event${count !== 1 ? 's' : ''}`,
+            messages: [
+                {
+                    id: createAiMessageId(),
+                    role: 'assistant',
+                    text: `Classifying ${count} imported Google Calendar event${count !== 1 ? 's' : ''}...`,
+                    createdAt: now,
+                },
+                {
+                    id: createAiMessageId(),
+                    role: 'user',
+                    text: classifyPrompt,
+                    createdAt: now + 1,
+                },
+            ],
+            createdAt: now,
+            updatedAt: now + 1,
+        };
+
+        setAiThreads(prev => [newThread, ...prev]);
+        setActiveAiThreadId(threadId);
+        setIsAiModalOpen(true);
+        setAiChatInput('');
+
+        sendAiRequest({
+            threadId,
+            userInput: classifyPrompt,
+            source: 'chat',
+        });
     };
 
     const closeAiCreateModal = () => {
-        if (!isAiModalOpen || isAiModalClosing) {
+        if (!isAiModalOpen) {
             return;
         }
 
@@ -1016,93 +1522,82 @@ function MainCalendar() {
                 return;
             }
 
-            stopAiSubmitting({ closeConnection: true });
-            enqueueSnackbar('AI request canceled because the create window was closed.', { variant: 'default' });
+            cancelActiveAiRequest('AI request canceled because the chat window was closed.');
         }
 
-        setIsAiModalClosing(true);
-        clearAiModalCloseTimer();
-        aiModalCloseTimerRef.current = window.setTimeout(() => {
-            setIsAiModalOpen(false);
-            setIsAiModalClosing(false);
-            aiModalCloseTimerRef.current = null;
-        }, MODAL_CLOSE_ANIMATION_MS);
+        setIsAiModalOpen(false);
+        restorePreviousSidebar();
     };
 
-    const handleAiTaskDescriptionChange = (value: string) => {
-        setAiTaskDescription(value);
+    const createNewAiThread = () => {
+        const now = Date.now();
+        const threadId = createAiThreadId();
+        const newThread: AiChatThread = {
+            id: threadId,
+            title: 'New thread',
+            messages: [
+                {
+                    id: createAiMessageId(),
+                    role: 'assistant',
+                    text: 'New thread started. Tell me what you want to schedule.',
+                    createdAt: now,
+                },
+            ],
+            createdAt: now,
+            updatedAt: now,
+        };
+        setAiThreads(prev => [newThread, ...prev]);
+        setActiveAiThreadId(threadId);
+        setAiChatInput('');
     };
 
-    const handleCreateWithAi = () => {
+    const deleteAiThread = (threadId: string) => {
+        if (isAiSubmitting) {
+            enqueueSnackbar('Cannot delete a thread while AI is processing.', { variant: 'warning' });
+            return;
+        }
+        setAiThreads(prev => {
+            const remaining = prev.filter(t => t.id !== threadId);
+            if (remaining.length === 0) {
+                const fallback = createDefaultAiThread();
+                setActiveAiThreadId(fallback.id);
+                return [fallback];
+            }
+            if (threadId === activeAiThreadId) {
+                setActiveAiThreadId(remaining[0].id);
+            }
+            return remaining;
+        });
+    };
+
+    const handleAiChatInputChange = (value: string) => {
+        setAiChatInput(value);
+    };
+
+    const handleSendAiChatMessage = () => {
         if (isAiSubmitting) {
             return;
         }
 
-        if (!aiTaskDescription.trim()) {
-            enqueueSnackbar('Please enter a task description first.', { variant: 'warning' });
+        const userInput = aiChatInput.trim();
+        if (!userInput) {
+            enqueueSnackbar('Please enter a message first.', { variant: 'warning' });
             return;
         }
 
-        setIsAiSubmitting(true);
-        console.log('AI Task Description:', aiTaskDescription);
+        const targetThreadId = activeAiThreadIdRef.current;
+        appendMessageToThread(targetThreadId, 'user', userInput);
+        updateThreadTitleFromFirstUserMessage(targetThreadId, userInput);
+        setAiChatInput('');
 
-        const timeoutMs = AI_REQUEST_TIMEOUT_MS;
-        aiRequestDeadlineRef.current = Date.now() + timeoutMs;
-
-        const cancelAiRequest = () => {
-            if (!isAiSubmittingRef.current) {
-                return;
-            }
-
-            stopAiSubmitting({ closeConnection: true });
-            enqueueSnackbar('AI request canceled.', { variant: 'default' });
-        };
-
-        const snackbarId = enqueueSnackbar(
-            <AiProcessingSnackbarContent
-                timeoutMs={timeoutMs}
-                deadlineRef={aiRequestDeadlineRef}
-                onCancel={cancelAiRequest}
-            />,
-            {
-                variant: 'info',
-                persist: true,
-            },
-        );
-        aiProcessingSnackbarIdRef.current = snackbarId;
-
-        if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
-            stopAiSubmitting();
-            enqueueWsDisconnectedSnackbar();
-            return;
-        }
-
-        aiTaskCreationResult.current = null;
-        ws.current?.send(`ai_task_description: ${aiTaskDescription}`);
-        // wait for the taskCreationResult to be set by the WebSocket message handler, then update the aiReplyText with the result
-        const checkForAiResult = () => {
-            if (!isAiSubmittingRef.current) {
-                return;
-            }
-
-            if (aiTaskCreationResult.current !== null) {
-                setAiReplyText(aiTaskCreationResult.current);
-                aiTaskCreationResult.current = null;
-                stopAiSubmitting();
-                enqueueSnackbar('AI has created tasks based on your description.', { variant: 'info' });
-            } else if (aiRequestDeadlineRef.current !== null && Date.now() > aiRequestDeadlineRef.current) {
-                stopAiSubmitting();
-                enqueueSnackbar('AI response timed out. Please try again.', { variant: 'warning' });
-            } else {
-                aiResultPollTimerRef.current = window.setTimeout(checkForAiResult, 500);
-            }
-        };
-        checkForAiResult();
+        sendAiRequest({
+            threadId: targetThreadId,
+            userInput,
+            source: 'chat',
+        });
     };
 
     const openTypeCreateModal = () => {
-        clearTypeModalCloseTimer();
-        setIsTypeModalClosing(false);
         setTypeModalMode('create');
         setTypeEditingOriginalName(null);
         setTypeDraftName('');
@@ -1115,8 +1610,6 @@ function MainCalendar() {
             return;
         }
 
-        clearTypeModalCloseTimer();
-        setIsTypeModalClosing(false);
         const currentType = modalDraft.type;
         setTypeModalMode('edit');
         setTypeEditingOriginalName(currentType);
@@ -1221,7 +1714,7 @@ function MainCalendar() {
     };
 
     const getTaskStyle = (type: string) => {
-        const backgroundColor = taskTypeColors[type] ?? (type === OTHER_TYPE ? defaultTypeColors[OTHER_TYPE] : '#dfe7ff');
+        const backgroundColor = displayTaskTypeColors[type] ?? (type === OTHER_TYPE ? defaultTypeColors[OTHER_TYPE] : '#dfe7ff');
         return {
             background: backgroundColor,
             color: getReadableTextColor(backgroundColor),
@@ -1235,32 +1728,45 @@ function MainCalendar() {
 
         if (isCreatingTask) {
             const dateForNewTask = creatingTaskDate;
+            const dateStr = buildDateString(dateForNewTask);
             const newTask: CalendarTask = {
                 id: nextTaskId,
                 title: modalDraft.title.trim(),
                 type: modalDraft.type,
-                time: modalDraft.time,
+                itemKind: modalDraft.itemKind,
+                commitmentCategory: (modalDraft.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(modalDraft.itemKind)) as TaskCommitmentCategory,
+                ddl: modalDraft.itemKind === 'task' ? modalDraft.ddl : '',
+                virtualDeadlineDate: modalDraft.itemKind === 'task' ? modalDraft.virtualDeadlineDate : '',
+                virtualDeadlineTime: modalDraft.itemKind === 'task' ? modalDraft.virtualDeadlineTime : '',
+                startTime: modalDraft.itemKind === 'event' ? modalDraft.startTime : '',
+                endTime: modalDraft.itemKind === 'event' ? modalDraft.endTime : '',
                 note: modalDraft.note,
-                date: buildDateString(dateForNewTask),
+                date: dateStr,
             };
             setTasks(prev => [...prev, newTask]);
-            enqueueSnackbar('Task created.', { variant: 'success' });
+            enqueueSnackbar('Item created.', { variant: 'success' });
         } else if (selectedTask) {
             setTasks(prev => prev.map(task => (
                 task.id === selectedTask.id
                     ? {
                         ...task,
                         title: modalDraft.title.trim(),
-                        time: modalDraft.time,
+                        itemKind: modalDraft.itemKind,
+                        commitmentCategory: modalDraft.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(modalDraft.itemKind),
+                        ddl: modalDraft.itemKind === 'task' ? modalDraft.ddl : '',
+                        virtualDeadlineDate: modalDraft.itemKind === 'task' ? modalDraft.virtualDeadlineDate : '',
+                        virtualDeadlineTime: modalDraft.itemKind === 'task' ? modalDraft.virtualDeadlineTime : '',
+                        startTime: modalDraft.itemKind === 'event' ? modalDraft.startTime : '',
+                        endTime: modalDraft.itemKind === 'event' ? modalDraft.endTime : '',
                         note: modalDraft.note,
                         type: modalDraft.type,
                     }
                     : task
             )));
-            enqueueSnackbar('Task updated.', { variant: 'success' });
+            enqueueSnackbar('Item updated.', { variant: 'success' });
         }
 
-        closeTaskModal();
+        closeTaskModal({ skipRestore: true });
     };
 
     const deleteTask = () => {
@@ -1269,8 +1775,8 @@ function MainCalendar() {
         }
 
         setTasks(prev => prev.filter(task => task.id !== selectedTask.id));
-        closeTaskModal();
-        enqueueSnackbar('Task deleted.', { variant: 'error' });
+        closeTaskModal({ skipRestore: true });
+        enqueueSnackbar('Item deleted.', { variant: 'error' });
     };
 
     const handleDayClick = (day: CalendarDay) => {
@@ -1282,90 +1788,284 @@ function MainCalendar() {
         // }
     };
 
+    const getSyncErrorMessage = (error: unknown) => {
+        if (error instanceof Error && error.message.trim()) {
+            return error.message;
+        }
+
+        if (typeof error === 'string' && error.trim()) {
+            return error;
+        }
+
+        if (error && typeof error === 'object') {
+            const maybeMessage = (error as { message?: unknown }).message;
+            if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
+                return maybeMessage;
+            }
+
+            const maybeError = (error as { error?: unknown }).error;
+            if (typeof maybeError === 'string' && maybeError.trim()) {
+                return maybeError;
+            }
+
+            try {
+                const serialized = JSON.stringify(error);
+                if (serialized && serialized !== '{}') {
+                    return serialized;
+                }
+            } catch {
+                // Ignore serialization failures and fall through to default message.
+            }
+        }
+
+        return 'Unknown sync error';
+    };
+
+    const closeGoogleCalendarPicker = (clearSession = true) => {
+        setIsGoogleCalendarPickerOpen(false);
+        setGoogleCalendarOptions([]);
+        setSelectedGoogleCalendarIds([]);
+        if (clearSession) {
+            setGoogleSyncSession(null);
+        }
+    };
+
+    const toggleGoogleCalendarSelection = (calendarId: string) => {
+        setSelectedGoogleCalendarIds(prev => (
+            prev.includes(calendarId)
+                ? prev.filter(id => id !== calendarId)
+                : [...prev, calendarId]
+        ));
+    };
+
+    const syncGoogleCalendar = async () => {
+        if (isGoogleSyncing || isGoogleCalendarPickerOpen) {
+            return;
+        }
+
+        setIsGoogleSyncing(true);
+        googleSyncCanceledByUserRef.current = false;
+        googleSyncTimedOutRef.current = false;
+        googleSyncRequestIdRef.current = null;
+
+        const abortPromise = new Promise<never>((_, reject) => {
+            googleSyncAbortRejectRef.current = (error: Error) => reject(error);
+        });
+
+        startGoogleSyncProgressIndicators();
+        try {
+            const beginOAuthPromise = invoke<GoogleCalendarSyncSession>('begin_google_calendar_sync');
+            // Keep an attached rejection handler to avoid unhandled rejection when UI cancellation wins the race.
+            void beginOAuthPromise.catch(() => undefined);
+
+            const session = await Promise.race([
+                beginOAuthPromise,
+                abortPromise,
+            ]);
+
+            if (session.calendars.length === 0) {
+                enqueueSnackbar('No importable Google calendars found in this account.', { variant: 'warning' });
+                return;
+            }
+
+            setGoogleSyncSession(session);
+            setGoogleCalendarOptions(session.calendars);
+            setSelectedGoogleCalendarIds(session.calendars.map(calendar => calendar.id));
+            closeOverlaySidebars();
+            setIsGoogleCalendarPickerOpen(true);
+        } catch (error) {
+            if (googleSyncTimedOutRef.current) {
+                enqueueSnackbar('Google OAuth timed out and was canceled.', { variant: 'warning' });
+            } else if (googleSyncCanceledByUserRef.current) {
+                enqueueSnackbar('Google OAuth canceled.', { variant: 'info' });
+            } else {
+                console.error('Google Calendar sync setup failed:', error);
+                const message = getSyncErrorMessage(error);
+                enqueueSnackbar(`Google Calendar sync setup failed: ${message}`, { variant: 'error' });
+            }
+        } finally {
+            stopGoogleSyncProgressIndicators();
+            googleSyncAbortRejectRef.current = null;
+            googleSyncRequestIdRef.current = null;
+            googleSyncCanceledByUserRef.current = false;
+            googleSyncTimedOutRef.current = false;
+            setIsGoogleSyncing(false);
+        }
+    };
+
+    const confirmGoogleCalendarImport = async () => {
+        if (isGoogleSyncing || !googleSyncSession) {
+            return;
+        }
+
+        const selectedIds = [...selectedGoogleCalendarIds];
+        if (selectedIds.length === 0) {
+            enqueueSnackbar('Please select at least one calendar to import.', { variant: 'warning' });
+            return;
+        }
+
+        setIsGoogleCalendarPickerOpen(false);
+        setIsGoogleSyncing(true);
+
+        const syncRequestId = createGoogleSyncRequestId();
+        googleSyncRequestIdRef.current = syncRequestId;
+
+        try {
+            const googleEvents = await invoke<GoogleCalendarNormalizedEvent[]>('sync_google_calendar_events', {
+                accessToken: googleSyncSession.accessToken,
+                selectedCalendarIds: selectedIds,
+                syncRequestId,
+            });
+
+            const existingMap = await loadGoogleEventTaskMapFromTempDb();
+
+            let nextId = nextTaskIdRef.current;
+            const nextTaskById = new Map<number, CalendarTask>();
+            const nextTaskOrder: number[] = [];
+            for (const task of tasksRef.current) {
+                nextTaskById.set(task.id, task);
+                nextTaskOrder.push(task.id);
+            }
+
+            const nextMap: Record<string, number> = {};
+            const assignedGoogleTaskIds = new Set<number>();
+            let importedTaskCount = 0;
+            let importedEventCount = 0;
+            for (const googleEvent of googleEvents) {
+                const mappedTaskId = existingMap[googleEvent.eventKey];
+                const reusableTaskId = Number.isInteger(mappedTaskId)
+                    && nextTaskById.has(mappedTaskId)
+                    && !assignedGoogleTaskIds.has(mappedTaskId)
+                    ? mappedTaskId
+                    : null;
+
+                const taskId = reusableTaskId ?? nextId;
+                if (reusableTaskId === null) {
+                    nextId += 1;
+                    nextTaskOrder.push(taskId);
+                }
+                assignedGoogleTaskIds.add(taskId);
+
+                nextMap[googleEvent.eventKey] = taskId;
+                const importedTask = buildTaskFromGoogleEvent(googleEvent, taskId);
+                if (importedTask.itemKind === 'task') {
+                    importedTaskCount += 1;
+                } else {
+                    importedEventCount += 1;
+                }
+                nextTaskById.set(taskId, importedTask);
+            }
+
+            const staleTaskIds = new Set(
+                (() => {
+                    const activeTaskIds = new Set<number>(Object.values(nextMap));
+                    return Object.entries(existingMap)
+                        .filter(([eventKey, taskId]) => (
+                            !Object.prototype.hasOwnProperty.call(nextMap, eventKey)
+                            && Number.isInteger(taskId)
+                            && !activeTaskIds.has(taskId)
+                        ))
+                        .map(([, taskId]) => taskId);
+                })(),
+            );
+
+            const mergedTasks = nextTaskOrder
+                .filter(taskId => !staleTaskIds.has(taskId))
+                .map(taskId => nextTaskById.get(taskId))
+                .filter((task): task is CalendarTask => Boolean(task));
+
+            tasksRef.current = mergedTasks;
+            setTasks(mergedTasks);
+            await saveGoogleEventTaskMapToTempDb(nextMap);
+
+            setTaskTypes(prev => prev.includes(GOOGLE_SYNC_TYPE) ? prev : [...prev, GOOGLE_SYNC_TYPE]);
+            setTaskTypeColors(prev => ({
+                ...prev,
+                [GOOGLE_SYNC_TYPE]: prev[GOOGLE_SYNC_TYPE] ?? '#8ac7ff',
+            }));
+            setFilterItemKind('all');
+
+            enqueueSnackbar(`Google Calendar sync completed: ${googleEvents.length} items imported (${importedEventCount} event${importedEventCount === 1 ? '' : 's'}, ${importedTaskCount} task${importedTaskCount === 1 ? '' : 's'}).`, {
+                variant: 'success',
+            });
+            openAiGoogleClassifySidebar(googleEvents.length);
+        } catch (error) {
+            console.error('Google Calendar sync failed:', error);
+            const message = getSyncErrorMessage(error);
+            if (message.toLowerCase().includes('canceled by user')) {
+                enqueueSnackbar('Google Calendar sync canceled.', { variant: 'info' });
+            } else {
+                enqueueSnackbar(`Google Calendar sync failed: ${message}`, { variant: 'error' });
+            }
+        } finally {
+            googleSyncRequestIdRef.current = null;
+            setGoogleSyncSession(null);
+            setGoogleCalendarOptions([]);
+            setSelectedGoogleCalendarIds([]);
+            setIsGoogleSyncing(false);
+        }
+    };
+
     const displayDate = dateTransition?.nextDate ?? currentDate;
     const effectiveViewMode: ViewMode = viewTransition?.toMode ?? viewMode;
+    const displayTitle = effectiveViewMode === 'week'
+        ? getWeekTitle(displayDate)
+        : effectiveViewMode === 'day'
+            ? getDayTitle(displayDate)
+            : effectiveViewMode === 'list'
+                ? 'Item List'
+                : `${displayDate.toLocaleString('default', { month: 'long' })} ${displayDate.getFullYear()}`;
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
+    const activeAiThread = aiThreads.find(thread => thread.id === activeAiThreadId) ?? aiThreads[0] ?? null;
+    const activeThreadProgress = aiThreadProgressById[activeAiThreadId] ?? null;
+    const shouldShowPendingAiCalendarConfirmation = hasPendingAiCalendarChanges && activeAiThreadId === pendingAiCalendarThreadId;
+
+
+    useEffect(() => {
+        if (!isAiModalOpen) {
+            return;
+        }
+        aiMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, [isAiModalOpen, activeAiThreadId, aiThreads]);
 
     return (
         <main className={`calendar-container ${viewMode === 'list' ? 'list-scroll-mode' : ''} ${isFilterRefreshActive ? 'filter-refresh-active' : ''}`}>
             <SnackbarProvider maxSnack={4}/>
-            <div className="calendar-header sticky-header">
-                <div className="header-top-row">
-                    <div className="calendar-nav">
-                        {effectiveViewMode !== 'list' && (
-                            <>
-                                <button className="nav-btn" onClick={handlePrevMonth} disabled={dateTransition !== null || viewTransition !== null}>&lt;</button>
-                                <button className="nav-btn" onClick={handleNextMonth} disabled={dateTransition !== null || viewTransition !== null}>&gt;</button>
-                            </>
-                        )}
-                        <button className="today-btn" onClick={handleToday} disabled={viewTransition !== null || (dateTransition !== null && effectiveViewMode !== 'list')}>today</button>
-                        <span className="button-divider" aria-hidden="true" />
-                        <button className="nav-btn nav-new-event-btn" onClick={() => openCreateTaskModal(new Date())}>new event</button>
-                        <button className="nav-btn nav-ai-create-btn" onClick={openAiCreateModal}>create with ai</button>
-                    </div>
-
-                    <div className="calendar-title">
-                        {effectiveViewMode === 'week'
-                            ? getWeekTitle(displayDate)
-                            : effectiveViewMode === 'day'
-                                ? getDayTitle(displayDate)
-                                : effectiveViewMode === 'list'
-                                    ? 'Task List'
-                                : `${displayDate.toLocaleString('default', { month: 'long' })} ${displayDate.getFullYear()}`}
-                    </div>
-
-                    <div className="view-selector">
-                        <button className={`view-btn ${effectiveViewMode === 'month' ? 'active' : ''}`} onClick={() => handleViewChange('month')} disabled={viewTransition !== null}>month</button>
-                        <button className={`view-btn ${effectiveViewMode === 'week' ? 'active' : ''}`} onClick={() => handleViewChange('week')} disabled={viewTransition !== null}>week</button>
-                        <button className={`view-btn ${effectiveViewMode === 'day' ? 'active' : ''}`} onClick={() => handleViewChange('day')} disabled={viewTransition !== null}>day</button>
-                        <button className={`view-btn ${effectiveViewMode === 'list' ? 'active' : ''}`} onClick={() => handleViewChange('list')} disabled={viewTransition !== null}>list</button>
-                        <span className="button-divider" aria-hidden="true" />
-                        <button
-                            className={`view-btn view-btn-filters ${isHeaderToolsOpen ? 'active' : ''}`}
-                            onClick={() => setIsHeaderToolsOpen(prev => !prev)}
-                            style={filtersButtonWidth ? { width: `${filtersButtonWidth}px` } : undefined}
-                        >
-                            {filtersButtonText}
-                        </button>
-                        <span className="view-btn-filters-measure" ref={filtersButtonMeasureRef} aria-hidden="true">
-                            {filtersButtonText}
-                        </span>
-                    </div>
-                </div>
-
-                <div className={`header-tools-collapsible ${isHeaderToolsOpen ? 'open' : ''}`}>
-                    <div className="header-tools">
-                        <div className="header-tools-group">
-                            <div className="header-tools-group-label"><label htmlFor="filterType">TYPE</label></div>
-                            <select id="filterType" value={filterType} onChange={(event) => setFilterType(event.target.value)}>
-                                <option value="all">All</option>
-                                {taskTypes.map(type => (
-                                    <option key={type} value={type}>{type}</option>
-                                ))}
-                            </select>
-                        </div>
-                        <div className="header-tools-group">
-                            <div className="header-tools-group-label"><label htmlFor="filterKeyword">SEARCH</label></div>
-                            <input
-                                id="filterKeyword"
-                                value={filterKeyword}
-                                onChange={(event) => setFilterKeyword(event.target.value)}
-                                placeholder=""
-                            />
-                        </div>
-                        <div className="header-tools-group">
-                            <div className="header-tools-group-label"><label htmlFor="searchScope">SCOPE</label></div>
-                            <select id="searchScope" value={searchScope} onChange={(event) => setSearchScope(event.target.value as typeof searchScope)}>
-                                <option value="all">All fields</option>
-                                <option value="title">Title</option>
-                                <option value="note">Note</option>
-                                <option value="time">Time</option>
-                                <option value="type">Type</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-            </div>
+            <HeaderControls
+                effectiveViewMode={effectiveViewMode}
+                displayTitle={displayTitle}
+                currentDisplayDate={displayDate}
+                dateTransitionActive={dateTransition !== null}
+                viewTransitionActive={viewTransition !== null}
+                isHeaderToolsOpen={isHeaderToolsOpen}
+                filtersButtonWidth={filtersButtonWidth}
+                filtersButtonText={filtersButtonText}
+                filtersButtonMeasureRef={filtersButtonMeasureRef}
+                filterType={filterType}
+                filterKeyword={filterKeyword}
+                searchScope={searchScope}
+                filterCommitment={filterCommitment}
+                filterItemKind={filterItemKind}
+                taskTypes={taskTypes}
+                deadlineMode={deadlineMode}
+                onPrev={handlePrevMonth}
+                onNext={handleNextMonth}
+                onToday={handleToday}
+                onJumpToDate={handleJumpToDate}
+                onOpenCreateEvent={() => openCreateTaskModal(new Date())}
+                onOpenAiChat={openAiCreateModal}
+                onOpenSosPlanner={openSosPlannerModal}
+                onSyncGoogleCalendar={syncGoogleCalendar}
+                isGoogleSyncing={isGoogleSyncing || isGoogleCalendarPickerOpen}
+                onViewChange={handleViewChange}
+                onToggleFilters={() => setIsHeaderToolsOpen(prev => !prev)}
+                onFilterTypeChange={setFilterType}
+                onFilterKeywordChange={setFilterKeyword}
+                onSearchScopeChange={setSearchScope}
+                onFilterCommitmentChange={setFilterCommitment}
+                onFilterItemKindChange={setFilterItemKind}
+                onDeadlineModeChange={setDeadlineMode}
+            />
             
             {viewTransition ? (
                 <div className={`view-transition-viewport direction-${viewTransition.direction}`}>
@@ -1401,181 +2101,157 @@ function MainCalendar() {
                 </div>
             )}
 
-            {modalDraft && (
-                <div className={`task-modal-backdrop ${isTaskModalClosing ? 'closing' : ''}`} onClick={closeTaskModal}>
-                    <div className={`task-modal ${isTaskModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
-                        <div className="task-modal-header">
-                            <h2>{isCreatingTask ? 'Create Event' : 'Edit Event'}</h2>
-                            <button className="task-modal-close" onClick={closeTaskModal}>x</button>
-                        </div>
-                        {!isCreatingTask && selectedTask && (
-                            <div className="task-modal-meta">
-                                {parseTaskDate(selectedTask.date).toLocaleDateString('default', {
-                                    weekday: 'long',
-                                    month: 'long',
-                                    day: 'numeric',
-                                    year: 'numeric',
-                                })}
-                            </div>
-                        )}
+            <TaskModal
+                    modalDraft={modalDraft}
+                    isCreatingTask={isCreatingTask}
+                    selectedTask={selectedTask}
+                    creatingTaskDate={creatingTaskDate}
+                    taskTypes={taskTypes}
+                    addTypeOptionValue={ADD_TYPE_OPTION_VALUE}
+                    onClose={closeTaskModal}
+                    onOpenTypeCreateModal={openTypeCreateModal}
+                    onOpenTypeEditModal={openTypeEditModal}
+                    onDeleteTask={deleteTask}
+                    onSaveTask={saveTaskModal}
+                    setModalDraft={setModalDraft}
+                />
 
-                        {isCreatingTask && (
-                            <div className="task-modal-meta">
-                                {creatingTaskDate.toLocaleDateString('default', {
-                                    weekday: 'long',
-                                    month: 'long',
-                                    day: 'numeric',
-                                    year: 'numeric',
-                                })}
-                            </div>
-                        )}
+            <TypeModal
+                isOpen={isTypeModalOpen}
+                mode={typeModalMode}
+                editingOriginalName={typeEditingOriginalName}
+                draftName={typeDraftName}
+                draftColor={typeDraftColor}
+                otherType={OTHER_TYPE}
+                onClose={closeTypeModal}
+                onSave={addTaskTypeWithColor}
+                onDeleteAndMoveToOther={deleteTypeAndMoveToOther}
+                setDraftName={setTypeDraftName}
+                setDraftColor={setTypeDraftColor}
+            />
 
-                        <label className="task-modal-label">Title</label>
-                        <input
-                            className="task-modal-input"
-                            value={modalDraft.title}
-                            onChange={(event) => setModalDraft(prev => prev ? { ...prev, title: event.target.value } : prev)}
-                        />
-
-                        <label className="task-modal-label">Time</label>
-                        <input
-                            className="task-modal-input"
-                            type="time"
-                            value={modalDraft.time}
-                            onChange={(event) => setModalDraft(prev => prev ? { ...prev, time: event.target.value } : prev)}
-                        />
-
-                        <label className="task-modal-label">Type</label>
-                        <div className="type-select-row">
-                            <select
-                                className="task-modal-input"
-                                value={modalDraft.type}
-                                onChange={(event) => {
-                                    const value = event.target.value as TaskType;
-                                    if (value === ADD_TYPE_OPTION_VALUE) {
-                                        openTypeCreateModal();
-                                        return;
-                                    }
-                                    setModalDraft(prev => prev ? { ...prev, type: value } : prev);
-                                }}
-                            >
-                                {taskTypes.map(type => (
-                                    <option key={type} value={type}>{type}</option>
-                                ))}
-                                <option value={ADD_TYPE_OPTION_VALUE}>+ add new type...</option>
-                            </select>
-                            <button className="task-modal-btn" onClick={openTypeEditModal}>edit</button>
-                        </div>
-
-                        <label className="task-modal-label">Note</label>
-                        <textarea
-                            className="task-modal-textarea"
-                            value={modalDraft.note}
-                            onChange={(event) => setModalDraft(prev => prev ? { ...prev, note: event.target.value } : prev)}
-                        />
-
-                        <div className="task-modal-actions">
-                            {!isCreatingTask && (
-                                <button className="task-modal-btn danger" onClick={deleteTask}>Delete</button>
-                            )}
-                            <button className="task-modal-btn" onClick={closeTaskModal}>Cancel</button>
-                            <button className="task-modal-btn primary" onClick={saveTaskModal}>Save</button>
-                        </div>
-                    </div>
+            <aside className={`panel-sidebar ${isGoogleCalendarPickerOpen ? 'open' : ''}`}>
+                <div className="panel-sidebar-header">
+                    <h2>Select calendars to import</h2>
+                    <button className="ai-sidebar-close" onClick={() => closeGoogleCalendarPicker()} aria-label="Close">✕</button>
                 </div>
-            )}
 
-            {isTypeModalOpen && (
-                <div className={`task-modal-backdrop ${isTypeModalClosing ? 'closing' : ''}`} onClick={closeTypeModal}>
-                    <div className={`task-modal type-create-modal ${isTypeModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
-                        <div className="task-modal-header">
-                            <h2>{typeModalMode === 'edit' ? 'Edit Type' : 'Create Type'}</h2>
-                            <button className="task-modal-close" onClick={closeTypeModal}>x</button>
-                        </div>
+                <div className="panel-sidebar-body">
+                    <p className="task-modal-meta">
+                        Selected {selectedGoogleCalendarIds.length} of {googleCalendarOptions.length} calendars.
+                    </p>
 
-                        <label className="task-modal-label">Type Name</label>
-                        <input
-                            className="task-modal-input"
-                            placeholder="e.g. study"
-                            value={typeDraftName}
-                            onChange={(event) => setTypeDraftName(event.target.value)}
-                        />
-
-                        <label className="task-modal-label">Type Color</label>
-                        <div className="type-color-picker-row">
-                            <input
-                                className="type-color-input"
-                                type="color"
-                                value={isValidHexColor(typeDraftColor) ? typeDraftColor : '#4f7ef7'}
-                                onChange={(event) => setTypeDraftColor(event.target.value)}
-                            />
-                            <input
-                                className="task-modal-input"
-                                value={typeDraftColor}
-                                onChange={(event) => setTypeDraftColor(event.target.value)}
-                            />
-                        </div>
-
-                        <div className="task-modal-actions">
-                            {typeModalMode === 'edit' && typeEditingOriginalName !== OTHER_TYPE && (
-                                <button className="task-modal-btn danger" onClick={deleteTypeAndMoveToOther}>
-                                    Delete Type (move to other)
-                                </button>
-                            )}
-                            <button className="task-modal-btn" onClick={closeTypeModal}>Cancel</button>
-                            <button
-                                className="task-modal-btn primary"
-                                onClick={addTaskTypeWithColor}
-                                disabled={!typeDraftName.trim() || !isValidHexColor(typeDraftColor)}
-                            >
-                                {typeModalMode === 'edit' ? 'Update Type' : 'Save Type'}
-                            </button>
-                        </div>
+                    <div className="google-calendar-picker-actions-row">
+                        <button type="button" className="task-modal-btn" onClick={() => setSelectedGoogleCalendarIds(googleCalendarOptions.map(calendar => calendar.id))}>
+                            Select all
+                        </button>
+                        <button type="button" className="task-modal-btn" onClick={() => setSelectedGoogleCalendarIds([])}>
+                            Clear all
+                        </button>
                     </div>
-                </div>
-            )}
 
-            {isAiModalOpen && (
-                <div className={`task-modal-backdrop ${isAiModalClosing ? 'closing' : ''}`} onClick={closeAiCreateModal}>
-                    <div className={`task-modal ai-create-modal ${isAiModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
-                        <div className="task-modal-header">
-                            <h2>Create With AI</h2>
-                            <button className="task-modal-close" onClick={closeAiCreateModal}>x</button>
-                        </div>
-
-                        <div className="ai-modal-grid">
-                            <div className="ai-modal-section">
-                                <label className="task-modal-label" htmlFor="aiTaskDescription">Task Description</label>
-                                <textarea
-                                    id="aiTaskDescription"
-                                    className="task-modal-textarea"
-                                    placeholder="Describe what you want to create..."
-                                    value={aiTaskDescription}
-                                    onChange={(event) => handleAiTaskDescriptionChange(event.target.value)}
+                    <div className="google-calendar-picker-list" role="group" aria-label="Google calendars">
+                        {googleCalendarOptions.map(calendar => (
+                            <label key={calendar.id} className="google-calendar-picker-item">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedGoogleCalendarIds.includes(calendar.id)}
+                                    onChange={() => toggleGoogleCalendarSelection(calendar.id)}
                                 />
-                            </div>
+                                <span className="google-calendar-picker-name">{calendar.name}</span>
+                            </label>
+                        ))}
+                    </div>
 
-                            <div className="ai-modal-section">
-                                <label className="task-modal-label" htmlFor="aiReplyPanel">AI Response</label>
-                                <div id="aiReplyPanel" className="ai-reply-panel">
-                                    {aiReplyText || 'AI response will appear here.'}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="task-modal-actions">
-                            <button className="task-modal-btn" onClick={closeAiCreateModal}>Close</button>
-                            <button
-                                className="task-modal-btn primary"
-                                onClick={handleCreateWithAi}
-                                disabled={isAiSubmitting}
-                            >
-                                {isAiSubmitting ? 'Sending...' : 'Send To AI'}
-                            </button>
-                        </div>
+                    <div className="panel-sidebar-actions">
+                        <button type="button" className="task-modal-btn" onClick={() => closeGoogleCalendarPicker()}>
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            className="task-modal-btn primary"
+                            onClick={confirmGoogleCalendarImport}
+                            disabled={selectedGoogleCalendarIds.length === 0}
+                        >
+                            Import selected calendars
+                        </button>
                     </div>
                 </div>
-            )}
+            </aside>
+
+            <aside className={`panel-sidebar ${isAiGoogleClassifySidebarOpen ? 'open' : ''}`}>
+                <div className="panel-sidebar-header">
+                    <h2>AI Classification</h2>
+                    <button className="ai-sidebar-close" onClick={closeAiGoogleClassifySidebar} aria-label="Close">✕</button>
+                </div>
+                <div className="panel-sidebar-body">
+                    <p className="sos-sidebar-description">
+                        <strong>{aiGoogleClassifyEventCount} Google Calendar event{aiGoogleClassifyEventCount !== 1 ? 's' : ''}</strong> were just imported.
+                    </p>
+                    <p className="sos-sidebar-description">
+                        Would you like AI to analyze each event and automatically determine an appropriate <strong>task type</strong> and <strong>commitment category</strong>?
+                    </p>
+                    <p className="sos-sidebar-description">
+                        AI will assign specific types (e.g. meeting, workout, travel) and mark each event as hard commitment or flexible work based on context.
+                    </p>
+                    <div className="panel-sidebar-actions">
+                        <button className="task-modal-btn" onClick={closeAiGoogleClassifySidebar}>Skip</button>
+                        <button className="task-modal-btn primary" onClick={runAiGoogleClassify} disabled={isAiSubmitting}>Let AI Classify</button>
+                    </div>
+                </div>
+            </aside>
+
+            <aside className={`sos-sidebar ${isSosModalOpen ? 'open' : ''}`}>
+                    <div className="sos-sidebar-header">
+                        <h2>SOS Schedule Rescue</h2>
+                        <button className="ai-sidebar-close" onClick={() => closeSosPlannerModal()} aria-label="Close SOS sidebar">✕</button>
+                    </div>
+
+                    <div className="sos-sidebar-body">
+                        <p className="sos-sidebar-description">
+                            Enter one sentence to tell AI how to auto-plan your schedule. You can also run with the default prompt.
+                        </p>
+
+                        <label className="task-modal-label" htmlFor="sos-user-prompt">One-line request (optional)</label>
+                        <textarea
+                            id="sos-user-prompt"
+                            className="task-modal-textarea sos-sidebar-textarea"
+                            value={sosPlannerDraft.userPrompt}
+                            placeholder={DEFAULT_SOS_USER_PROMPT}
+                            onChange={(event) => setSosPlannerDraft(prev => ({ ...prev, userPrompt: event.target.value }))}
+                            disabled={isAiSubmitting}
+                        />
+
+                        <div className="sos-sidebar-actions">
+                            <button className="task-modal-btn" onClick={() => closeSosPlannerModal()} disabled={isAiSubmitting}>Cancel</button>
+                            <button className="task-modal-btn primary" onClick={runSosPlanner} disabled={isAiSubmitting}>Run SOS Plan</button>
+                        </div>
+                    </div>
+                </aside>
+
+            <AiChatSidebar
+                isOpen={isAiModalOpen}
+                isSubmitting={isAiSubmitting}
+                aiThreads={aiThreads}
+                activeAiThreadId={activeAiThreadId}
+                activeAiThread={activeAiThread}
+                activeThreadProgress={activeThreadProgress}
+                hasPendingCalendarChanges={shouldShowPendingAiCalendarConfirmation}
+                pendingCalendarChangeCount={pendingAiCalendarChangeCount}
+                aiChatInput={aiChatInput}
+                aiMessagesEndRef={aiMessagesEndRef}
+                onClose={closeAiCreateModal}
+                onCreateThread={createNewAiThread}
+                onDeleteThread={deleteAiThread}
+                onSwitchThread={setActiveAiThreadId}
+                onInputChange={handleAiChatInputChange}
+                onSendMessage={handleSendAiChatMessage}
+                onCancelRequest={() => cancelActiveAiRequest('AI request canceled.')}
+                onAcceptPendingCalendarChanges={acceptPendingAiCalendarChanges}
+                onDiscardPendingCalendarChanges={discardPendingAiCalendarChanges}
+                openTaskModalFromPreview={openTaskModalFromPreview}
+                getTaskStyle={getTaskStyle}
+            />
         </main>
     );
 }
