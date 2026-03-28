@@ -29,6 +29,8 @@ export interface WebSocketGatewayParams extends GatewaySnackbarRefs {
     setTaskTypeColors: Dispatch<SetStateAction<Record<string, string>>>;
     setModalDraft: Dispatch<SetStateAction<Omit<CalendarTask, 'id' | 'date'> | null>>;
     setFilterType: Dispatch<SetStateAction<string>>;
+    aiCalendarStagingRef: MutableRefObject<boolean>;
+    registerAiCalendarMutation: (threadId: string | null) => void;
     setAiThreadProgress: (threadId: string, progress: AiThreadProgress) => void;
     stopAiSubmitting: (options?: { closeConnection?: boolean; reason?: 'completed' | 'failed' | 'canceled' | 'interrupted' }) => void;
     connectWebSocket: () => void;
@@ -236,6 +238,8 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
         setTaskTypeColors,
         setModalDraft,
         setFilterType,
+        aiCalendarStagingRef,
+        registerAiCalendarMutation,
         setAiThreadProgress,
         stopAiSubmitting,
         connectWebSocket,
@@ -252,6 +256,54 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
     const socket = new WebSocket('ws://localhost:8765');
     ws.current = socket;
 
+    const isStagingCalendarChanges = () => aiCalendarStagingRef.current;
+
+    const applyTaskTypes = (updater: (prev: string[]) => string[]) => {
+        const next = updater(taskTypesRef.current);
+        taskTypesRef.current = next;
+        if (!isStagingCalendarChanges()) {
+            setTaskTypes(next);
+        }
+        return next;
+    };
+
+    const applyTasks = (updater: (prev: CalendarTask[]) => CalendarTask[]) => {
+        const next = updater(tasksRef.current);
+        tasksRef.current = next;
+        if (!isStagingCalendarChanges()) {
+            setTasks(next);
+        }
+        return next;
+    };
+
+    const applyTaskTypeColors = (updater: (prev: Record<string, string>) => Record<string, string>) => {
+        const next = updater(taskTypeColorsRef.current);
+        taskTypeColorsRef.current = next;
+        if (!isStagingCalendarChanges()) {
+            setTaskTypeColors(next);
+        }
+        return next;
+    };
+
+    const applyModalDraftIfLive = (updater: (prev: Omit<CalendarTask, 'id' | 'date'> | null) => Omit<CalendarTask, 'id' | 'date'> | null) => {
+        if (isStagingCalendarChanges()) {
+            return;
+        }
+        setModalDraft(updater);
+    };
+
+    const applyFilterTypeIfLive = (updater: (prev: string) => string) => {
+        if (isStagingCalendarChanges()) {
+            return;
+        }
+        setFilterType(updater);
+    };
+
+    const registerMutationForCurrentThread = () => {
+        const threadId = pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current ?? null;
+        registerAiCalendarMutation(threadId);
+    };
+
     const handleMessage = (event: MessageEvent) => {
         console.log('Received message from WebSocket:', event.data);
 
@@ -263,8 +315,8 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
             let type = taskInfo.type || 'other';
             if (!taskTypesRef.current.includes(type)) {
                 const randomColor = `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`;
-                setTaskTypes(prev => [...prev, type]);
-                setTaskTypeColors(prev => ({
+                applyTaskTypes(prev => [...prev, type]);
+                applyTaskTypeColors(prev => ({
                     ...prev,
                     [type]: randomColor,
                 }));
@@ -295,7 +347,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                 date: buildDateString(date),
             };
 
-            setTasks(prev => [...prev, newTask]);
+            applyTasks(prev => [...prev, newTask]);
             if (isAiSubmittingRef.current) {
                 aiRequestDeadlineRef.current = Date.now() + aiRequestTimeoutMs;
             }
@@ -317,6 +369,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
             };
             waitForAcknowledgement();
 
+            registerMutationForCurrentThread();
             appendTaskEventMessageToActiveThread(`AI created a new task: ${title || '(untitled task)'}`, newTask);
         }
 
@@ -470,16 +523,17 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     ...(payload.updates?.note !== undefined ? { note: String(payload.updates.note) } : {}),
                 };
 
-                setTasks(prev => prev.map(task => task.id === taskId ? updatedTask : task));
+                applyTasks(prev => prev.map(task => task.id === taskId ? updatedTask : task));
 
                 if (!taskTypesRef.current.includes(updatedTask.type)) {
-                    setTaskTypes(prev => [...prev, updatedTask.type]);
-                    setTaskTypeColors(prev => ({
+                    applyTaskTypes(prev => [...prev, updatedTask.type]);
+                    applyTaskTypeColors(prev => ({
                         ...prev,
                         [updatedTask.type]: prev[updatedTask.type] ?? defaultTypeColors[OTHER_TYPE],
                     }));
                 }
 
+                registerMutationForCurrentThread();
                 appendTaskEventMessageToActiveThread(
                     `AI updated task #${updatedTask.id}: ${updatedTask.title}`,
                     updatedTask,
@@ -523,7 +577,8 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     return;
                 }
 
-                setTasks(prev => prev.filter(task => task.id !== taskId));
+                applyTasks(prev => prev.filter(task => task.id !== taskId));
+                registerMutationForCurrentThread();
                 appendTaskEventMessageToActiveThread(
                     `AI deleted task #${existingTask.id}: ${existingTask.title}`,
                 );
@@ -557,13 +612,15 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                 }
 
                 if (!taskTypesRef.current.includes(taskType)) {
-                    setTaskTypes(prev => [...prev, taskType]);
+                    applyTaskTypes(prev => [...prev, taskType]);
                 }
 
-                setTaskTypeColors(prev => ({
+                applyTaskTypeColors(prev => ({
                     ...prev,
                     [taskType]: color,
                 }));
+
+                registerMutationForCurrentThread();
 
                 appendMessageToThread(
                     pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,
@@ -628,25 +685,27 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
 
                 const movedCount = tasksRef.current.filter(task => task.type === oldType).length;
 
-                setTaskTypes(prev => prev.map(type => (type === oldType ? newType : type)));
-                setTaskTypeColors(prev => {
+                applyTaskTypes(prev => prev.map(type => (type === oldType ? newType : type)));
+                applyTaskTypeColors(prev => {
                     const next = { ...prev };
                     const previousColor = next[oldType] ?? defaultTypeColors[OTHER_TYPE];
                     delete next[oldType];
                     next[newType] = isValidHexColor(newColor) ? newColor : previousColor;
                     return next;
                 });
-                setTasks(prev => prev.map(task => (
+                applyTasks(prev => prev.map(task => (
                     task.type === oldType
                         ? { ...task, type: newType }
                         : task
                 )));
-                setModalDraft(prev => (
+                applyModalDraftIfLive(prev => (
                     prev && prev.type === oldType
                         ? { ...prev, type: newType }
                         : prev
                 ));
-                setFilterType(prev => (prev === oldType ? newType : prev));
+                applyFilterTypeIfLive(prev => (prev === oldType ? newType : prev));
+
+                registerMutationForCurrentThread();
 
                 appendMessageToThread(
                     pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,
@@ -713,29 +772,31 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
 
                 const movedCount = tasksRef.current.filter(task => task.type === targetType).length;
 
-                setTaskTypes(prev => {
+                applyTaskTypes(prev => {
                     const withoutDeleted = prev.filter(type => type !== targetType);
                     return withoutDeleted.includes(moveToType)
                         ? withoutDeleted
                         : [...withoutDeleted, moveToType];
                 });
-                setTaskTypeColors(prev => {
+                applyTaskTypeColors(prev => {
                     const next = { ...prev };
                     delete next[targetType];
                     next[moveToType] = next[moveToType] ?? defaultTypeColors[OTHER_TYPE];
                     return next;
                 });
-                setTasks(prev => prev.map(task => (
+                applyTasks(prev => prev.map(task => (
                     task.type === targetType
                         ? { ...task, type: moveToType }
                         : task
                 )));
-                setModalDraft(prev => (
+                applyModalDraftIfLive(prev => (
                     prev && prev.type === targetType
                         ? { ...prev, type: moveToType }
                         : prev
                 ));
-                setFilterType(prev => (prev === targetType ? moveToType : prev));
+                applyFilterTypeIfLive(prev => (prev === targetType ? moveToType : prev));
+
+                registerMutationForCurrentThread();
 
                 appendMessageToThread(
                     pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,

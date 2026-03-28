@@ -88,6 +88,12 @@ interface SosPlannerDraft {
     userPrompt: string;
 }
 
+interface PendingAiCalendarSnapshot {
+    tasks: CalendarTask[];
+    taskTypes: string[];
+    taskTypeColors: Record<string, string>;
+}
+
 type AiSubmitSource = 'chat' | 'sos';
 
 type StopAiSubmitReason = 'completed' | 'failed' | 'canceled' | 'interrupted';
@@ -135,6 +141,9 @@ function MainCalendar() {
     const [aiThreads, setAiThreads] = useState<AiChatThread[]>(() => [createDefaultAiThread()]);
     const [activeAiThreadId, setActiveAiThreadId] = useState('default_thread');
     const [aiThreadProgressById, setAiThreadProgressById] = useState<Record<string, AiThreadProgress>>({});
+    const [hasPendingAiCalendarChanges, setHasPendingAiCalendarChanges] = useState(false);
+    const [pendingAiCalendarChangeCount, setPendingAiCalendarChangeCount] = useState(0);
+    const [pendingAiCalendarThreadId, setPendingAiCalendarThreadId] = useState<string | null>(null);
     const [typeModalMode, setTypeModalMode] = useState<'create' | 'edit'>('create');
     const [typeEditingOriginalName, setTypeEditingOriginalName] = useState<string | null>(null);
     const [typeDraftName, setTypeDraftName] = useState('');
@@ -191,16 +200,32 @@ function MainCalendar() {
     const isWindowCloseCleanupRunningRef = useRef(false);
     const hasWindowDestroyBeenRequestedRef = useRef(false);
     const aiMessagesEndRef = useRef<HTMLDivElement | null>(null);
+    const pendingAiCalendarSnapshotRef = useRef<PendingAiCalendarSnapshot | null>(null);
+    const aiCalendarStagingRef = useRef(false);
+    const hasPendingAiCalendarChangesRef = useRef(false);
+
+    const cloneTasks = (source: CalendarTask[]) => source.map(task => ({ ...task }));
+    const cloneTaskTypes = (source: string[]) => [...source];
+    const cloneTaskTypeColors = (source: Record<string, string>) => ({ ...source });
 
     useEffect(() => {
+        if (aiCalendarStagingRef.current) {
+            return;
+        }
         taskTypesRef.current = taskTypes;
     }, [taskTypes]);
 
     useEffect(() => {
+        if (aiCalendarStagingRef.current) {
+            return;
+        }
         tasksRef.current = tasks;
     }, [tasks]);
 
     useEffect(() => {
+        if (aiCalendarStagingRef.current) {
+            return;
+        }
         taskTypeColorsRef.current = taskTypeColors;
     }, [taskTypeColors]);
 
@@ -399,6 +424,14 @@ function MainCalendar() {
                 ws.current = null;
             }
         }
+
+        if (
+            reason !== 'interrupted'
+            && pendingAiCalendarSnapshotRef.current
+            && !hasPendingAiCalendarChangesRef.current
+        ) {
+            clearPendingAiCalendarChanges();
+        }
     };
 
     const cancelActiveAiRequest = (reasonMessage: string) => {
@@ -466,6 +499,75 @@ function MainCalendar() {
         );
     };
 
+    const clearPendingAiCalendarChanges = () => {
+        pendingAiCalendarSnapshotRef.current = null;
+        aiCalendarStagingRef.current = false;
+        hasPendingAiCalendarChangesRef.current = false;
+        setHasPendingAiCalendarChanges(false);
+        setPendingAiCalendarChangeCount(0);
+        setPendingAiCalendarThreadId(null);
+    };
+
+    const ensurePendingAiCalendarSnapshot = () => {
+        if (pendingAiCalendarSnapshotRef.current) {
+            return;
+        }
+
+        pendingAiCalendarSnapshotRef.current = {
+            tasks: cloneTasks(tasksRef.current),
+            taskTypes: cloneTaskTypes(taskTypesRef.current),
+            taskTypeColors: cloneTaskTypeColors(taskTypeColorsRef.current),
+        };
+        aiCalendarStagingRef.current = true;
+        hasPendingAiCalendarChangesRef.current = false;
+        setHasPendingAiCalendarChanges(false);
+        setPendingAiCalendarChangeCount(0);
+        setPendingAiCalendarThreadId(null);
+    };
+
+    const registerAiCalendarMutation = (threadId: string | null) => {
+        hasPendingAiCalendarChangesRef.current = true;
+        setHasPendingAiCalendarChanges(true);
+        setPendingAiCalendarChangeCount(prev => prev + 1);
+        if (threadId) {
+            setPendingAiCalendarThreadId(threadId);
+        }
+    };
+
+    const acceptPendingAiCalendarChanges = () => {
+        if (!pendingAiCalendarSnapshotRef.current || !hasPendingAiCalendarChanges) {
+            return;
+        }
+
+        setTasks(cloneTasks(tasksRef.current));
+        setTaskTypes(cloneTaskTypes(taskTypesRef.current));
+        setTaskTypeColors(cloneTaskTypeColors(taskTypeColorsRef.current));
+        clearPendingAiCalendarChanges();
+        enqueueSnackbar('Applied all pending AI calendar changes.', { variant: 'success' });
+    };
+
+    const discardPendingAiCalendarChanges = () => {
+        const snapshot = pendingAiCalendarSnapshotRef.current;
+        if (!snapshot) {
+            return;
+        }
+
+        const restoredTasks = cloneTasks(snapshot.tasks);
+        const restoredTaskTypes = cloneTaskTypes(snapshot.taskTypes);
+        const restoredTaskTypeColors = cloneTaskTypeColors(snapshot.taskTypeColors);
+
+        tasksRef.current = restoredTasks;
+        taskTypesRef.current = restoredTaskTypes;
+        taskTypeColorsRef.current = restoredTaskTypeColors;
+
+        setTasks(restoredTasks);
+        setTaskTypes(restoredTaskTypes);
+        setTaskTypeColors(restoredTaskTypeColors);
+
+        clearPendingAiCalendarChanges();
+        enqueueSnackbar('Discarded pending AI calendar changes.', { variant: 'info' });
+    };
+
     const updateThreadTitleFromFirstUserMessage = (threadId: string, messageText: string) => {
         const normalized = messageText.trim();
         if (!normalized) {
@@ -530,6 +632,8 @@ function MainCalendar() {
             setTaskTypeColors,
             setModalDraft,
             setFilterType,
+            aiCalendarStagingRef,
+            registerAiCalendarMutation,
             setAiThreadProgress: updateThreadProgress,
             stopAiSubmitting,
             connectWebSocket,
@@ -1145,6 +1249,8 @@ function MainCalendar() {
             return;
         }
 
+        ensurePendingAiCalendarSnapshot();
+
         ws.current?.send(`ai_message: ${JSON.stringify({
             message: userInput,
             thread_id: threadId,
@@ -1709,6 +1815,7 @@ function MainCalendar() {
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
     const activeAiThread = aiThreads.find(thread => thread.id === activeAiThreadId) ?? aiThreads[0] ?? null;
     const activeThreadProgress = aiThreadProgressById[activeAiThreadId] ?? null;
+    const shouldShowPendingAiCalendarConfirmation = hasPendingAiCalendarChanges && activeAiThreadId === pendingAiCalendarThreadId;
 
 
     useEffect(() => {
@@ -1898,6 +2005,8 @@ function MainCalendar() {
                 activeAiThreadId={activeAiThreadId}
                 activeAiThread={activeAiThread}
                 activeThreadProgress={activeThreadProgress}
+                hasPendingCalendarChanges={shouldShowPendingAiCalendarConfirmation}
+                pendingCalendarChangeCount={pendingAiCalendarChangeCount}
                 aiChatInput={aiChatInput}
                 aiMessagesEndRef={aiMessagesEndRef}
                 onClose={closeAiCreateModal}
@@ -1907,6 +2016,8 @@ function MainCalendar() {
                 onInputChange={handleAiChatInputChange}
                 onSendMessage={handleSendAiChatMessage}
                 onCancelRequest={() => cancelActiveAiRequest('AI request canceled.')}
+                onAcceptPendingCalendarChanges={acceptPendingAiCalendarChanges}
+                onDiscardPendingCalendarChanges={discardPendingAiCalendarChanges}
                 openTaskModalFromPreview={openTaskModalFromPreview}
                 getTaskStyle={getTaskStyle}
             />

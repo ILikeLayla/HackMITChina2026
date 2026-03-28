@@ -47,6 +47,8 @@ interface AiChatSidebarProps {
     activeAiThreadId: string;
     activeAiThread: AiChatThread | null;
     activeThreadProgress?: AiThreadProgress | null;
+    hasPendingCalendarChanges: boolean;
+    pendingCalendarChangeCount: number;
     aiChatInput: string;
     aiMessagesEndRef: React.RefObject<HTMLDivElement | null>;
     onClose: () => void;
@@ -56,6 +58,8 @@ interface AiChatSidebarProps {
     onInputChange: (value: string) => void;
     onSendMessage: () => void;
     onCancelRequest: () => void;
+    onAcceptPendingCalendarChanges: () => void;
+    onDiscardPendingCalendarChanges: () => void;
     openTaskModalFromPreview: (taskPreview: AiTaskPreview) => void;
     getTaskStyle: (type: string) => React.CSSProperties;
 }
@@ -67,6 +71,8 @@ export function AiChatSidebar({
     activeAiThreadId,
     activeAiThread,
     activeThreadProgress,
+    hasPendingCalendarChanges,
+    pendingCalendarChangeCount,
     aiChatInput,
     aiMessagesEndRef,
     onClose,
@@ -76,6 +82,8 @@ export function AiChatSidebar({
     onInputChange,
     onSendMessage,
     onCancelRequest,
+    onAcceptPendingCalendarChanges,
+    onDiscardPendingCalendarChanges,
     openTaskModalFromPreview,
     getTaskStyle,
 }: AiChatSidebarProps) {
@@ -197,6 +205,32 @@ export function AiChatSidebar({
                             <div className="ai-chat-progress-fill" style={{ width: `${Math.max(0, Math.min(100, activeThreadProgress.percent))}%` }} />
                         </div>
                         <div className="ai-chat-progress-status">{activeThreadProgress.status}</div>
+                    </div>
+                )}
+
+                {hasPendingCalendarChanges && (
+                    <div className="ai-chat-confirmation-panel" role="status" aria-live="polite">
+                        <div className="ai-chat-confirmation-text">
+                            {`AI made ${pendingCalendarChangeCount} pending calendar change${pendingCalendarChangeCount === 1 ? '' : 's'}. Review and choose:`}
+                        </div>
+                        <div className="ai-chat-confirmation-actions">
+                            <button
+                                type="button"
+                                className="task-modal-btn"
+                                onClick={onDiscardPendingCalendarChanges}
+                                disabled={isSubmitting}
+                            >
+                                Discard
+                            </button>
+                            <button
+                                type="button"
+                                className="task-modal-btn primary"
+                                onClick={onAcceptPendingCalendarChanges}
+                                disabled={isSubmitting}
+                            >
+                                Accept all
+                            </button>
+                        </div>
                     </div>
                 )}
 
