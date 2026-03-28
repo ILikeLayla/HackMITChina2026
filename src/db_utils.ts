@@ -1,5 +1,6 @@
 import type { CalendarTask } from "./general_utils";
 import { isValidHexColor } from "./general_utils";
+import { FileStorage } from "./file_storage";
 
 export const TASKS_DB_KEY = 'mvp-calendar-tasks';
 export const TASK_TYPES_DB_KEY = 'mvp-calendar-task-types';
@@ -22,72 +23,52 @@ export function loadTaskTypeColorsFromTempDb(types: string[]): Record<string, st
         }
     }
 
-    if (typeof window === 'undefined') {
-        return fallback;
-    }
-
-    const raw = window.localStorage.getItem(TASK_TYPE_COLORS_DB_KEY);
-    if (!raw) {
-        return fallback;
-    }
-
     try {
-        const parsed = JSON.parse(raw) as Record<string, string>;
+        const raw = FileStorage.read<Record<string, string>>(TASK_TYPE_COLORS_DB_KEY);
+        if (!raw) {
+            return fallback;
+        }
+
         const merged = { ...fallback };
-        for (const type of Object.keys(parsed)) {
-            if (isValidHexColor(parsed[type])) {
-                merged[type] = parsed[type];
+        for (const type of Object.keys(raw)) {
+            if (isValidHexColor(raw[type])) {
+                merged[type] = raw[type];
             }
         }
         return merged;
-    } catch {
+    } catch (error) {
+        console.error('[db_utils] Failed to load task type colors:', error);
         return fallback;
     }
 }
 
-export function saveTaskTypeColorsToTempDb(typeColors: Record<string, string>) {
-    if (typeof window === 'undefined') {
-        return;
+export function saveTaskTypeColorsToTempDb(typeColors: Record<string, string>): void {
+    try {
+        FileStorage.write(TASK_TYPE_COLORS_DB_KEY, typeColors);
+    } catch (error) {
+        console.error('[db_utils] Failed to save task type colors:', error);
     }
-    window.localStorage.setItem(TASK_TYPE_COLORS_DB_KEY, JSON.stringify(typeColors));
 }
 
 export function loadTaskTypesFromTempDb(): string[] {
     const seedTypes = ['other'];
 
-    if (typeof window === 'undefined') {
-        return seedTypes;
-    }
-
-    const raw = window.localStorage.getItem(TASK_TYPES_DB_KEY);
-    if (!raw) {
-        return seedTypes;
-    }
-
     try {
-        const parsed = JSON.parse(raw) as string[];
-        if (!Array.isArray(parsed) || parsed.length === 0) {
+        const raw = FileStorage.read<string[]>(TASK_TYPES_DB_KEY);
+        if (!raw || !Array.isArray(raw) || raw.length === 0) {
             return seedTypes;
         }
-        return parsed;
-    } catch {
+        return raw;
+    } catch (error) {
+        console.error('[db_utils] Failed to load task types:', error);
         return seedTypes;
     }
 }
 
 export function loadTasksFromTempDb(): CalendarTask[] {
-    if (typeof window === 'undefined') {
-        return seedTasks;
-    }
-
-    const raw = window.localStorage.getItem(TASKS_DB_KEY);
-    if (!raw) {
-        return seedTasks;
-    }
-
     try {
-        const parsed = JSON.parse(raw) as Array<Partial<CalendarTask> & { time?: string }>;
-        if (!Array.isArray(parsed)) {
+        const raw = FileStorage.read<Array<Partial<CalendarTask> & { time?: string }>>(TASKS_DB_KEY);
+        if (!raw || !Array.isArray(raw)) {
             return seedTasks;
         }
 
@@ -103,7 +84,7 @@ export function loadTasksFromTempDb(): CalendarTask[] {
             };
         };
 
-        return parsed
+        return raw
             .filter(task => Number.isInteger(task.id))
             .map(task => {
                 const legacyTime = typeof task.time === 'string' ? task.time : '';
@@ -135,53 +116,52 @@ export function loadTasksFromTempDb(): CalendarTask[] {
                     note: String(task.note ?? ''),
                 } satisfies CalendarTask;
             });
-    } catch {
+    } catch (error) {
+        console.error('[db_utils] Failed to load tasks:', error);
         return seedTasks;
     }
 }
 
-export function saveTasksToTempDb(tasks: CalendarTask[]) {
-    if (typeof window === 'undefined') {
-        return;
+export function saveTasksToTempDb(tasks: CalendarTask[]): void {
+    try {
+        FileStorage.write(TASKS_DB_KEY, tasks);
+    } catch (error) {
+        console.error('[db_utils] Failed to save tasks:', error);
     }
-    window.localStorage.setItem(TASKS_DB_KEY, JSON.stringify(tasks));
 }
 
-export function saveTaskTypesToTempDb(types: string[]) {
-    if (typeof window === 'undefined') {
-        return;
+export function saveTaskTypesToTempDb(types: string[]): void {
+    try {
+        FileStorage.write(TASK_TYPES_DB_KEY, types);
+    } catch (error) {
+        console.error('[db_utils] Failed to save task types:', error);
     }
-    window.localStorage.setItem(TASK_TYPES_DB_KEY, JSON.stringify(types));
 }
 
 export function loadGoogleEventTaskMapFromTempDb(): Record<string, number> {
-    if (typeof window === 'undefined') {
-        return {};
-    }
-
-    const raw = window.localStorage.getItem(GOOGLE_EVENT_TASK_MAP_DB_KEY);
-    if (!raw) {
-        return {};
-    }
-
     try {
-        const parsed = JSON.parse(raw) as Record<string, number>;
+        const raw = FileStorage.read<Record<string, number>>(GOOGLE_EVENT_TASK_MAP_DB_KEY);
+        if (!raw) {
+            return {};
+        }
+
         const normalized: Record<string, number> = {};
-        for (const [eventKey, taskId] of Object.entries(parsed)) {
+        for (const [eventKey, taskId] of Object.entries(raw)) {
             if (typeof eventKey === 'string' && Number.isInteger(taskId) && taskId > 0) {
                 normalized[eventKey] = taskId;
             }
         }
         return normalized;
-    } catch {
+    } catch (error) {
+        console.error('[db_utils] Failed to load Google event task map:', error);
         return {};
     }
 }
 
-export function saveGoogleEventTaskMapToTempDb(eventTaskMap: Record<string, number>) {
-    if (typeof window === 'undefined') {
-        return;
+export function saveGoogleEventTaskMapToTempDb(eventTaskMap: Record<string, number>): void {
+    try {
+        FileStorage.write(GOOGLE_EVENT_TASK_MAP_DB_KEY, eventTaskMap);
+    } catch (error) {
+        console.error('[db_utils] Failed to save Google event task map:', error);
     }
-
-    window.localStorage.setItem(GOOGLE_EVENT_TASK_MAP_DB_KEY, JSON.stringify(eventTaskMap));
 }

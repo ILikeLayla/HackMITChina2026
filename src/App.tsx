@@ -16,6 +16,7 @@ import {
     saveTasksToTempDb,
     saveTaskTypesToTempDb,
 } from "./db_utils";
+// import { migrateLocalStorageToFileStorage, clearLocalStorageData } from "./file_storage";
 import { DayView } from "./calendar_views/DayView";
 import { ListView } from "./calendar_views/ListView";
 import { MonthView } from "./calendar_views/MonthView";
@@ -118,9 +119,10 @@ function MainCalendar() {
     const [viewMode, setViewMode] = useState<ViewMode>('month');
     const [dateTransition, setDateTransition] = useState<DateTransitionState | null>(null);
     const [viewTransition, setViewTransition] = useState<ViewTransitionState | null>(null);
-    const [tasks, setTasks] = useState<CalendarTask[]>(() => loadTasksFromTempDb());
-    const [taskTypes, setTaskTypes] = useState<string[]>(() => loadTaskTypesFromTempDb());
-    const [taskTypeColors, setTaskTypeColors] = useState<Record<string, string>>(() => loadTaskTypeColorsFromTempDb(loadTaskTypesFromTempDb()));
+    const [tasks, setTasks] = useState<CalendarTask[]>([]);
+    const [taskTypes, setTaskTypes] = useState<string[]>(['other']);
+    const [taskTypeColors, setTaskTypeColors] = useState<Record<string, string>>(defaultTypeColors);
+    const [isDataLoaded, setIsDataLoaded] = useState(false);
     const [selectedTaskId, setSelectedTaskId] = useState<number | null>(null);
     const [isCreatingTask, setIsCreatingTask] = useState(false);
     const [creatingTaskDate, setCreatingTaskDate] = useState(new Date());
@@ -767,20 +769,73 @@ function MainCalendar() {
     }, []);
 
     useEffect(() => {
-        cancelDateTransition();
-    }, [viewMode]);
+        if (isDataLoaded) {
+            return;
+        }
+
+        let isMounted = true;
+
+        const loadData = async () => {
+            try {
+                // const migrationResult = await migrateLocalStorageToFileStorage();
+                // if (migrationResult.success && migrationResult.migratedKeys.length > 0) {
+                //     console.log('[Migration] Successfully migrated keys:', migrationResult.migratedKeys);
+                // } else if (migrationResult.errors.length > 0) {
+                //     console.error('[Migration] Migration errors:', migrationResult.errors);
+                // }
+
+                if (!isMounted) {
+                    return;
+                }
+
+                const loadedTypes = await loadTaskTypesFromTempDb();
+                const loadedColors = await loadTaskTypeColorsFromTempDb(loadedTypes);
+                const loadedTasks = await loadTasksFromTempDb();
+
+                setTaskTypes(loadedTypes);
+                setTaskTypeColors(loadedColors);
+                setTasks(loadedTasks);
+                setIsDataLoaded(true);
+
+                // if (migrationResult.success && migrationResult.migratedKeys.length > 0) {
+                //     clearLocalStorageData();
+                //     console.log('[Migration] LocalStorage data cleared after successful migration.');
+                // }
+            } catch (error) {
+                console.error('[App] Failed to load data:', error);
+                if (isMounted) {
+                    setIsDataLoaded(true);
+                }
+            }
+        };
+
+        void loadData();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [isDataLoaded]);
 
     useEffect(() => {
+        if (!isDataLoaded) {
+            return;
+        }
         saveTasksToTempDb(tasks);
-    }, [tasks]);
+    }, [tasks, isDataLoaded]);
 
     useEffect(() => {
+        if (!isDataLoaded) {
+            return;
+        }
         saveTaskTypesToTempDb(taskTypes);
-    }, [taskTypes]);
+    }, [taskTypes, isDataLoaded]);
 
     useEffect(() => {
+        if (!isDataLoaded) {
+            return;
+        }
         saveTaskTypeColorsToTempDb(taskTypeColors);
-    }, [taskTypeColors]);
+    }, [taskTypeColors, isDataLoaded]);
 
     useEffect(() => {
         if (!filtersButtonMeasureRef.current) {
@@ -1593,7 +1648,7 @@ function MainCalendar() {
                 syncRequestId,
             });
 
-            const existingMap = loadGoogleEventTaskMapFromTempDb();
+            const existingMap = await loadGoogleEventTaskMapFromTempDb();
 
             let nextId = nextTaskIdRef.current;
             const nextTaskById = new Map<number, CalendarTask>();
@@ -1634,7 +1689,7 @@ function MainCalendar() {
 
             tasksRef.current = mergedTasks;
             setTasks(mergedTasks);
-            saveGoogleEventTaskMapToTempDb(nextMap);
+            await saveGoogleEventTaskMapToTempDb(nextMap);
 
             setTaskTypes(prev => prev.includes(GOOGLE_SYNC_TYPE) ? prev : [...prev, GOOGLE_SYNC_TYPE]);
             setTaskTypeColors(prev => ({

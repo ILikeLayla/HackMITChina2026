@@ -2,8 +2,10 @@
 use chrono::{DateTime, Local};
 use reqwest::Client;
 use std::collections::HashSet;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread;
@@ -551,6 +553,96 @@ pub struct Task {
     description: String,
 }
 
+fn get_data_dir() -> Result<PathBuf, String> {
+    let app_data_dir = dirs::data_local_dir()
+        .ok_or_else(|| "Failed to resolve local app data directory".to_string())?
+        .join("LaylaCalendar");
+    
+    if !app_data_dir.exists() {
+        fs::create_dir_all(&app_data_dir)
+            .map_err(|e| format!("Failed to create data directory '{}': {}", app_data_dir.display(), e))?;
+    }
+    
+    Ok(app_data_dir)
+}
+
+#[tauri::command]
+fn file_storage_read(key: String) -> Result<serde_json::Value, String> {
+    let data_dir = get_data_dir()?;
+    let file_path = data_dir.join(format!("{}.json", key));
+    
+    if !file_path.exists() {
+        return Ok(serde_json::Value::Null);
+    }
+    
+    let content = fs::read_to_string(&file_path)
+        .map_err(|e| format!("Failed to read file '{}': {}", file_path.display(), e))?;
+    
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse JSON from file '{}': {}", file_path.display(), e))?;
+    
+    Ok(value)
+}
+
+#[tauri::command]
+fn file_storage_write(key: String, value: serde_json::Value) -> Result<(), String> {
+    let data_dir = get_data_dir()?;
+    let file_path = data_dir.join(format!("{}.json", key));
+    
+    let content = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("Failed to serialize JSON for key '{}': {}", key, e))?;
+    
+    fs::write(&file_path, content)
+        .map_err(|e| format!("Failed to write file '{}': {}", file_path.display(), e))?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+fn file_storage_delete(key: String) -> Result<(), String> {
+    let data_dir = get_data_dir()?;
+    let file_path = data_dir.join(format!("{}.json", key));
+    
+    if file_path.exists() {
+        fs::remove_file(&file_path)
+            .map_err(|e| format!("Failed to delete file '{}': {}", file_path.display(), e))?;
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
+fn file_storage_list() -> Result<Vec<String>, String> {
+    let data_dir = get_data_dir()?;
+    
+    let entries = fs::read_dir(&data_dir)
+        .map_err(|e| format!("Failed to read directory '{}': {}", data_dir.display(), e))?;
+    
+    let mut keys: Vec<String> = Vec::new();
+    
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+        
+        if path.extension().map(|ext| ext == "json").unwrap_or(false) {
+            if let Some(stem) = path.file_stem() {
+                if let Some(key) = stem.to_str() {
+                    keys.push(key.to_string());
+                }
+            }
+        }
+    }
+    
+    Ok(keys)
+}
+
+#[tauri::command]
+fn file_storage_exists(key: String) -> Result<bool, String> {
+    let data_dir = get_data_dir()?;
+    let file_path = data_dir.join(format!("{}.json", key));
+    Ok(file_path.exists())
+}
+
 #[tauri::command]
 fn get_events() -> Vec<Event> {
     let events = vec![
@@ -595,6 +687,11 @@ pub fn run() {
             begin_google_calendar_sync,
             sync_google_calendar_events,
             cancel_google_calendar_sync,
+            file_storage_read,
+            file_storage_write,
+            file_storage_delete,
+            file_storage_list,
+            file_storage_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
