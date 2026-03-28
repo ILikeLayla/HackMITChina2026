@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
 
 HEALTH_CHECK_HOST = "127.0.0.1"
@@ -24,9 +25,15 @@ HEALTH_CHECK_PORT = 8766
 # Toggle this in code to enable/disable process auto-restart after websocket disconnect.
 AUTO_RESTART_ON_DISCONNECT = False
 
+os.makedirs("../layla-calender-log", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    # write a copy of the logs to a file in the log directory named with the current timestamp
+    handlers=[
+        logging.FileHandler(f"../layla-calender-log/langchain_server_{int(time.time())}.log"),
+        logging.StreamHandler(sys.stdout),
+    ],
 )
 logger = logging.getLogger("langchain-server")
 

@@ -6,16 +6,6 @@ export const TASK_TYPES_DB_KEY = 'mvp-calendar-task-types';
 export const TASK_TYPE_COLORS_DB_KEY = 'mvp-calendar-task-type-colors';
 
 export const seedTasks: CalendarTask[] = [
-    { id: 1, title: 'Conference', date: '2026-03-01', type: 'work', time: '09:00', note: 'Main hall presentation.' },
-    { id: 2, title: 'All Day Event', date: '2026-03-01', type: 'personal', time: '10:00', note: 'Family activity day.' },
-    { id: 3, title: '10:30a Meeting', date: '2026-03-01', type: 'work', time: '10:30', note: 'Discuss project scope.' },
-    { id: 4, title: '12p Lunch', date: '2026-03-01', type: 'personal', time: '12:00', note: 'Lunch with friends.' },
-    { id: 5, title: '7th Birthday Party', date: '2026-03-03', type: 'personal', time: '18:30', note: 'Bring gifts and cake.' },
-    { id: 6, title: 'Long Event', date: '2026-03-07', type: 'work', time: '09:30', note: 'All-day workshop block A.' },
-    { id: 7, title: 'Long Event', date: '2026-03-08', type: 'work', time: '09:30', note: 'All-day workshop block B.' },
-    { id: 8, title: '4p Repeating Event', date: '2026-03-08', type: 'work', time: '16:00', note: 'Weekly sync meeting.' },
-    { id: 9, title: '4p Repeating Event', date: '2026-03-15', type: 'work', time: '16:00', note: 'Weekly sync meeting.' },
-    { id: 10, title: 'Click for Google', date: '2026-03-27', type: 'important', time: '11:00', note: 'Prepare link + checklist.' },
 ];
 
 export const defaultTypeColors: Record<string, string> = {

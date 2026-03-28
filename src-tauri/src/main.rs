@@ -64,15 +64,6 @@ fn spawn_python_server() -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| format!("Failed to start Python server: {e}"));
     }
-
-    #[cfg(not(windows))]
-    {
-        Command::new(&python_exe)
-            .arg(&server_script)
-            .spawn()
-            .map(|_| ())
-            .map_err(|e| format!("Failed to start Python server: {e}"))
-    }
 }
 
 fn wait_for_server_ready(timeout: Duration, poll_interval: Duration) -> bool {
