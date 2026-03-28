@@ -1909,9 +1909,14 @@ function MainCalendar() {
             }
 
             const nextMap: Record<string, number> = {};
+            const assignedGoogleTaskIds = new Set<number>();
+            let importedTaskCount = 0;
+            let importedEventCount = 0;
             for (const googleEvent of googleEvents) {
                 const mappedTaskId = existingMap[googleEvent.eventKey];
-                const reusableTaskId = Number.isInteger(mappedTaskId) && nextTaskById.has(mappedTaskId)
+                const reusableTaskId = Number.isInteger(mappedTaskId)
+                    && nextTaskById.has(mappedTaskId)
+                    && !assignedGoogleTaskIds.has(mappedTaskId)
                     ? mappedTaskId
                     : null;
 
@@ -1920,16 +1925,29 @@ function MainCalendar() {
                     nextId += 1;
                     nextTaskOrder.push(taskId);
                 }
+                assignedGoogleTaskIds.add(taskId);
 
                 nextMap[googleEvent.eventKey] = taskId;
-                nextTaskById.set(taskId, buildTaskFromGoogleEvent(googleEvent, taskId));
+                const importedTask = buildTaskFromGoogleEvent(googleEvent, taskId);
+                if (importedTask.itemKind === 'task') {
+                    importedTaskCount += 1;
+                } else {
+                    importedEventCount += 1;
+                }
+                nextTaskById.set(taskId, importedTask);
             }
 
             const staleTaskIds = new Set(
-                Object.entries(existingMap)
-                    .filter(([eventKey]) => !Object.prototype.hasOwnProperty.call(nextMap, eventKey))
-                    .map(([, taskId]) => taskId)
-                    .filter(taskId => Number.isInteger(taskId)),
+                (() => {
+                    const activeTaskIds = new Set<number>(Object.values(nextMap));
+                    return Object.entries(existingMap)
+                        .filter(([eventKey, taskId]) => (
+                            !Object.prototype.hasOwnProperty.call(nextMap, eventKey)
+                            && Number.isInteger(taskId)
+                            && !activeTaskIds.has(taskId)
+                        ))
+                        .map(([, taskId]) => taskId);
+                })(),
             );
 
             const mergedTasks = nextTaskOrder
@@ -1946,8 +1964,9 @@ function MainCalendar() {
                 ...prev,
                 [GOOGLE_SYNC_TYPE]: prev[GOOGLE_SYNC_TYPE] ?? '#8ac7ff',
             }));
+            setFilterItemKind('all');
 
-            enqueueSnackbar(`Google Calendar sync completed: ${googleEvents.length} events imported.`, {
+            enqueueSnackbar(`Google Calendar sync completed: ${googleEvents.length} items imported (${importedEventCount} event${importedEventCount === 1 ? '' : 's'}, ${importedTaskCount} task${importedTaskCount === 1 ? '' : 's'}).`, {
                 variant: 'success',
             });
             openAiGoogleClassifySidebar(googleEvents.length);

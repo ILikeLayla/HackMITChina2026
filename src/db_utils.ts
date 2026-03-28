@@ -91,11 +91,23 @@ export async function loadTasksFromTempDb(): Promise<CalendarTask[]> {
             .filter(task => Number.isInteger(task.id))
             .map(task => {
                 const legacyTime = typeof task.time === 'string' ? task.time : '';
-                const inferredKind = task.itemKind === 'event'
+                const normalizedNote = String(task.note ?? '').toLowerCase();
+                const isGoogleTaskByNote = String(task.type ?? '').toLowerCase() === 'google'
+                    && normalizedNote.includes('changes made to the title, description, or attachments will not be saved')
+                    && normalizedNote.includes('tasks.google.com/task/');
+                const hasExplicitDdl = typeof task.ddl === 'string' && task.ddl.trim().length > 0;
+                const hasExplicitEventTime =
+                    (typeof task.startTime === 'string' && task.startTime.trim().length > 0)
+                    || (typeof task.endTime === 'string' && task.endTime.trim().length > 0);
+                const inferredKind = isGoogleTaskByNote
+                    ? 'task'
+                    : task.itemKind === 'event'
                     ? 'event'
                     : task.itemKind === 'task'
                         ? 'task'
-                        : task.type === 'google' || legacyTime.includes('-')
+                        : hasExplicitDdl
+                            ? 'task'
+                            : hasExplicitEventTime || legacyTime.includes('-')
                             ? 'event'
                             : 'task';
 

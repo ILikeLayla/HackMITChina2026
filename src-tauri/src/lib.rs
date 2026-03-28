@@ -232,9 +232,12 @@ async fn fetch_google_events_for_calendar(
             return Err(format!("Google Calendar events request failed ({status}): {body}"));
         }
 
-        let payload: GoogleCalendarEventsResponse = response
-            .json()
+        let payload_text = response
+            .text()
             .await
+            .map_err(|e| format!("Failed to read Google Calendar events response body: {e}"))?;
+
+        let payload: GoogleCalendarEventsResponse = serde_json::from_str(&payload_text)
             .map_err(|e| format!("Failed to decode Google Calendar events response: {e}"))?;
 
         for event in payload.items.unwrap_or_default() {
@@ -367,9 +370,12 @@ async fn begin_google_calendar_sync() -> Result<GoogleCalendarSyncSession, Strin
         return Err(format!("Google Calendar list request failed ({status}): {body}"));
     }
 
-    let calendar_list: GoogleCalendarListResponse = calendars_response
-        .json()
+    let calendar_list_text = calendars_response
+        .text()
         .await
+        .map_err(|e| format!("Failed to read calendar list response body: {e}"))?;
+
+    let calendar_list: GoogleCalendarListResponse = serde_json::from_str(&calendar_list_text)
         .map_err(|e| format!("Failed to decode calendar list response: {e}"))?;
 
     let calendars = calendar_list
@@ -458,9 +464,12 @@ async fn sync_google_calendar_events(
             return Err(format!("Google Calendar list request failed ({status}): {body}"));
         }
 
-        let calendar_list: GoogleCalendarListResponse = calendars_response
-            .json()
+        let calendar_list_text = calendars_response
+            .text()
             .await
+            .map_err(|e| format!("Failed to read calendar list response body: {e}"))?;
+
+        let calendar_list: GoogleCalendarListResponse = serde_json::from_str(&calendar_list_text)
             .map_err(|e| format!("Failed to decode calendar list response: {e}"))?;
 
         let mut merged_events: Vec<GoogleCalendarNormalizedEvent> = Vec::new();
