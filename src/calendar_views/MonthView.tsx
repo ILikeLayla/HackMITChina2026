@@ -3,6 +3,7 @@ import {
     getTaskDisplayTime,
     type CalendarDay,
     type CalendarTask,
+    type DeadlineMode,
 } from "../general_utils";
 
 type DayTaskQuery = (day: CalendarDay) => CalendarTask[];
@@ -16,6 +17,7 @@ interface MonthViewProps {
     getTaskStyle: TaskStyleResolver;
     openTaskModal: TaskOpener;
     handleDayClick: DayClickHandler;
+    deadlineMode: DeadlineMode;
 }
 
 export function MonthView({
@@ -24,6 +26,7 @@ export function MonthView({
     getTaskStyle,
     openTaskModal,
     handleDayClick,
+    deadlineMode,
 }: MonthViewProps) {
     return (
         <div className="calendar-grid month-view-grid">
@@ -61,14 +64,14 @@ export function MonthView({
                                                         key={task.id}
                                                         className={`task clickable-task ${task.type} commitment-${commitmentCategory}${task._aiPreviewStatus ? ` ${task._aiPreviewStatus}` : ''}`}
                                                         style={getTaskStyle(task.type)}
-                                                        title={`${task.title} ${getTaskDisplayTime(task)}`}
+                                                        title={`${task.title} ${getTaskDisplayTime(task, deadlineMode)}`}
                                                         onClick={(event) => {
                                                             event.stopPropagation();
                                                             if (task._aiPreviewStatus !== 'ai-preview-deleted') openTaskModal(task);
                                                         }}
                                                     >
                                                         <div className="task-meta-line">
-                                                            <p className="task-time">{getTaskDisplayTime(task)}</p>
+                                                            <p className="task-time">{getTaskDisplayTime(task, deadlineMode)}</p>
                                                             <span className="task-label-stack">
                                                                 <span className={`task-kind-badge ${task.itemKind}`}>
                                                                     {task.itemKind === 'event' ? 'EVT' : 'TSK'}

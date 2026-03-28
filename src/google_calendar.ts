@@ -36,6 +36,7 @@ export interface GoogleCalendarNormalizedEvent {
 export function buildTaskFromGoogleEvent(event: GoogleCalendarNormalizedEvent, taskId: number): CalendarTask {
     const isTask = isGoogleTaskBackedEvent(event.note);
     const normalizedNote = isTask ? stripGoogleTaskBoilerplate(event.note) : event.note;
+    const deadline = isTask ? (event.endTime || event.startTime || '') : '';
 
     return {
         id: taskId,
@@ -44,7 +45,9 @@ export function buildTaskFromGoogleEvent(event: GoogleCalendarNormalizedEvent, t
         type: 'google',
         commitmentCategory: 'undetermined',
         itemKind: isTask ? 'task' : 'event',
-        ddl: isTask ? (event.endTime || event.startTime || '') : '',
+        ddl: deadline,
+        virtualDeadlineDate: event.date,
+        virtualDeadlineTime: deadline,
         startTime: event.startTime,
         endTime: event.endTime,
         note: normalizedNote,

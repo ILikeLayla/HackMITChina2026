@@ -123,6 +123,12 @@ export async function loadTasksFromTempDb(): Promise<CalendarTask[]> {
                     ddl: inferredKind === 'task'
                         ? String(task.ddl ?? legacyTime)
                         : '',
+                    virtualDeadlineDate: inferredKind === 'task'
+                        ? String((task as any).virtualDeadlineDate ?? task.date ?? '')
+                        : '',
+                    virtualDeadlineTime: inferredKind === 'task'
+                        ? String((task as any).virtualDeadlineTime ?? (task as any).virtualDeadline ?? task.ddl ?? legacyTime)
+                        : '',
                     startTime: inferredKind === 'event'
                         ? String(task.startTime ?? legacyRange.startTime)
                         : '',

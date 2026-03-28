@@ -5,6 +5,7 @@ import {
     getTaskCommitmentCategoryLabel,
     getTaskDisplayTime,
     type CalendarTask,
+    type DeadlineMode,
 } from "../general_utils";
 
 type TaskStyleResolver = (type: string) => React.CSSProperties;
@@ -15,6 +16,7 @@ interface ListViewProps {
     listScrollTargetRef: RefObject<HTMLDivElement | null>;
     getTaskStyle: TaskStyleResolver;
     openTaskModal: TaskOpener;
+    deadlineMode: DeadlineMode;
 }
 
 export function ListView({
@@ -22,6 +24,7 @@ export function ListView({
     listScrollTargetRef,
     getTaskStyle,
     openTaskModal,
+    deadlineMode,
 }: ListViewProps) {
     const firstUpcomingKey = getFirstUpcomingTaskKey(listTaskGroups);
 
@@ -48,7 +51,7 @@ export function ListView({
                             >
                                 <div className="list-card-task-main">
                                     <span className="task-main-left">
-                                        <span className="task-time">{getTaskDisplayTime(task)}</span>
+                                        <span className="task-time">{getTaskDisplayTime(task, deadlineMode)}</span>
                                         <span className="task-divider" aria-hidden="true"></span>
                                         <span className="task-main-title">{task.title}</span>
                                     </span>

@@ -4,6 +4,7 @@ import {
     type CalendarTask,
     type TaskCommitmentCategory,
 } from "./general_utils";
+import { buildDateString } from "./calendar_logic";
 
 interface TaskModalProps {
     modalDraft: Omit<CalendarTask, 'id' | 'date'> | null;
@@ -78,10 +79,15 @@ export function TaskModal({
                         value={modalDraft.itemKind}
                         onChange={(event) => {
                             const nextKind = event.target.value as 'task' | 'event';
+                            const defaultVirtualDate = isCreatingTask 
+                                ? buildDateString(creatingTaskDate) 
+                                : (selectedTask ? selectedTask.date : buildDateString(new Date()));
                             setModalDraft(prev => prev ? {
                                 ...prev,
                                 itemKind: nextKind,
                                 ddl: nextKind === 'task' ? (prev.ddl || '09:00') : '',
+                                virtualDeadlineDate: nextKind === 'task' ? (prev.virtualDeadlineDate || defaultVirtualDate) : '',
+                                virtualDeadlineTime: nextKind === 'task' ? (prev.virtualDeadlineTime || '09:00') : '',
                                 startTime: nextKind === 'event' ? (prev.startTime || '09:00') : '',
                                 endTime: nextKind === 'event' ? (prev.endTime || '10:00') : '',
                             } : prev);
@@ -113,6 +119,20 @@ export function TaskModal({
                                 type="time"
                                 value={modalDraft.ddl}
                                 onChange={(event) => setModalDraft(prev => prev ? { ...prev, ddl: event.target.value } : prev)}
+                            />
+                            <label className="task-modal-label">Virtual DDL Date</label>
+                            <input
+                                className="task-modal-input"
+                                type="date"
+                                value={modalDraft.virtualDeadlineDate}
+                                onChange={(event) => setModalDraft(prev => prev ? { ...prev, virtualDeadlineDate: event.target.value } : prev)}
+                            />
+                            <label className="task-modal-label">Virtual DDL Time</label>
+                            <input
+                                className="task-modal-input"
+                                type="time"
+                                value={modalDraft.virtualDeadlineTime}
+                                onChange={(event) => setModalDraft(prev => prev ? { ...prev, virtualDeadlineTime: event.target.value } : prev)}
                             />
                         </>
                     ) : (

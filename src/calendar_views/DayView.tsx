@@ -4,6 +4,7 @@ import {
     getTaskDisplayTime,
     type CalendarDay,
     type CalendarTask,
+    type DeadlineMode,
 } from "../general_utils";
 
 type DayTaskQuery = (day: CalendarDay) => CalendarTask[];
@@ -15,6 +16,7 @@ interface DayViewProps {
     getTasksForDay: DayTaskQuery;
     getTaskStyle: TaskStyleResolver;
     openTaskModal: TaskOpener;
+    deadlineMode: DeadlineMode;
 }
 
 export function DayView({
@@ -22,6 +24,7 @@ export function DayView({
     getTasksForDay,
     getTaskStyle,
     openTaskModal,
+    deadlineMode,
 }: DayViewProps) {
     const now = new Date();
     const day: CalendarDay = {
@@ -45,7 +48,7 @@ export function DayView({
             >
                 <div className="day-view-task-main">
                     <span className="task-main-left">
-                        <span className="task-time">{getTaskDisplayTime(task)}</span>
+                        <span className="task-time">{getTaskDisplayTime(task, deadlineMode)}</span>
                         <span className="task-divider" aria-hidden="true"></span>
                         <span className="task-main-title">{task.title}</span>
                     </span>

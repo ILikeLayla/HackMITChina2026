@@ -52,6 +52,7 @@ import {
     type CalendarDay,
     type CalendarTask,
     type TaskCommitmentCategory,
+    type DeadlineMode,
 } from "./general_utils";
 import { SnackbarProvider, closeSnackbar, enqueueSnackbar } from 'notistack';
 import { AiChatSidebar, type AiChatRole, type AiChatThread, type AiTaskPreview, type AiThreadProgress } from "./ai_chat";
@@ -155,6 +156,7 @@ function MainCalendar() {
     const [searchScope, setSearchScope] = useState<SearchScope>('all');
     const [filterCommitment, setFilterCommitment] = useState<string>('all');
     const [filterItemKind, setFilterItemKind] = useState<string>('all');
+    const [deadlineMode, setDeadlineMode] = useState<DeadlineMode>('actual');
     const [isGoogleSyncing, setIsGoogleSyncing] = useState(false);
     const [isGoogleCalendarPickerOpen, setIsGoogleCalendarPickerOpen] = useState(false);
     const [googleCalendarOptions, setGoogleCalendarOptions] = useState<GoogleCalendarSelectionItem[]>([]);
@@ -976,6 +978,7 @@ function MainCalendar() {
                     listScrollTargetRef={listScrollTargetRef}
                     getTaskStyle={getTaskStyle}
                     openTaskModal={openTaskModal}
+                    deadlineMode={deadlineMode}
                 />
             );
         }
@@ -987,6 +990,7 @@ function MainCalendar() {
                     getTasksForDay={getTasksForDay}
                     getTaskStyle={getTaskStyle}
                     openTaskModal={openTaskModal}
+                    deadlineMode={deadlineMode}
                 />
             );
         }
@@ -999,6 +1003,7 @@ function MainCalendar() {
                     getTaskStyle={getTaskStyle}
                     openTaskModal={openTaskModal}
                     handleDayClick={handleDayClick}
+                    deadlineMode={deadlineMode}
                 />
             );
         }
@@ -1010,6 +1015,7 @@ function MainCalendar() {
                 getTaskStyle={getTaskStyle}
                 openTaskModal={openTaskModal}
                 handleDayClick={handleDayClick}
+                deadlineMode={deadlineMode}
             />
         );
     };
@@ -1060,13 +1066,13 @@ function MainCalendar() {
         ? { ...taskTypeColors, ...taskTypeColorsRef.current }
         : taskTypeColors;
 
-    const filteredAndSortedTasks = filterAndSortTasks(displayTasks, filterType, filterKeyword, searchScope, filterCommitment, filterItemKind);
+    const filteredAndSortedTasks = filterAndSortTasks(displayTasks, filterType, filterKeyword, searchScope, filterCommitment, filterItemKind, deadlineMode);
 
     const getTasksForDay = (day: CalendarDay) => {
-        return getTasksForDayFromTasks(filteredAndSortedTasks, day);
+        return getTasksForDayFromTasks(filteredAndSortedTasks, day, deadlineMode);
     };
 
-    const listTaskGroups = groupTasksByDate(filteredAndSortedTasks);
+    const listTaskGroups = groupTasksByDate(filteredAndSortedTasks, deadlineMode);
 
     useEffect(() => {
         if (viewMode !== 'list') {
@@ -1214,6 +1220,8 @@ function MainCalendar() {
             itemKind: task.itemKind,
             commitmentCategory: task.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(task.itemKind),
             ddl: task.ddl,
+            virtualDeadlineDate: task.virtualDeadlineDate,
+            virtualDeadlineTime: task.virtualDeadlineTime,
             startTime: task.startTime,
             endTime: task.endTime,
             note: task.note,
@@ -1228,6 +1236,8 @@ function MainCalendar() {
             itemKind: preview.itemKind,
             commitmentCategory: preview.commitmentCategory,
             ddl: preview.ddl,
+            virtualDeadlineDate: preview.date,
+            virtualDeadlineTime: preview.ddl,
             startTime: preview.startTime,
             endTime: preview.endTime,
             type: preview.type,
@@ -1239,6 +1249,7 @@ function MainCalendar() {
         captureCurrentSidebar();
         closeOverlaySidebars();
         const defaultType = taskTypes[0] ?? 'work';
+        const dateStr = buildDateString(date);
         setIsCreatingTask(true);
         setSelectedTaskId(null);
         console.log('Creating task for date:', date);
@@ -1249,6 +1260,8 @@ function MainCalendar() {
             itemKind: 'task',
             commitmentCategory: 'flexible_work',
             ddl: '09:00',
+            virtualDeadlineDate: dateStr,
+            virtualDeadlineTime: '09:00',
             startTime: '09:00',
             endTime: '10:00',
             note: '',
@@ -1714,6 +1727,7 @@ function MainCalendar() {
 
         if (isCreatingTask) {
             const dateForNewTask = creatingTaskDate;
+            const dateStr = buildDateString(dateForNewTask);
             const newTask: CalendarTask = {
                 id: nextTaskId,
                 title: modalDraft.title.trim(),
@@ -1721,10 +1735,12 @@ function MainCalendar() {
                 itemKind: modalDraft.itemKind,
                 commitmentCategory: (modalDraft.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(modalDraft.itemKind)) as TaskCommitmentCategory,
                 ddl: modalDraft.itemKind === 'task' ? modalDraft.ddl : '',
+                virtualDeadlineDate: modalDraft.itemKind === 'task' ? modalDraft.virtualDeadlineDate : '',
+                virtualDeadlineTime: modalDraft.itemKind === 'task' ? modalDraft.virtualDeadlineTime : '',
                 startTime: modalDraft.itemKind === 'event' ? modalDraft.startTime : '',
                 endTime: modalDraft.itemKind === 'event' ? modalDraft.endTime : '',
                 note: modalDraft.note,
-                date: buildDateString(dateForNewTask),
+                date: dateStr,
             };
             setTasks(prev => [...prev, newTask]);
             enqueueSnackbar('Item created.', { variant: 'success' });
@@ -1737,6 +1753,8 @@ function MainCalendar() {
                         itemKind: modalDraft.itemKind,
                         commitmentCategory: modalDraft.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(modalDraft.itemKind),
                         ddl: modalDraft.itemKind === 'task' ? modalDraft.ddl : '',
+                        virtualDeadlineDate: modalDraft.itemKind === 'task' ? modalDraft.virtualDeadlineDate : '',
+                        virtualDeadlineTime: modalDraft.itemKind === 'task' ? modalDraft.virtualDeadlineTime : '',
                         startTime: modalDraft.itemKind === 'event' ? modalDraft.startTime : '',
                         endTime: modalDraft.itemKind === 'event' ? modalDraft.endTime : '',
                         note: modalDraft.note,
@@ -2028,6 +2046,7 @@ function MainCalendar() {
                 filterCommitment={filterCommitment}
                 filterItemKind={filterItemKind}
                 taskTypes={taskTypes}
+                deadlineMode={deadlineMode}
                 onPrev={handlePrevMonth}
                 onNext={handleNextMonth}
                 onToday={handleToday}
@@ -2044,6 +2063,7 @@ function MainCalendar() {
                 onSearchScopeChange={setSearchScope}
                 onFilterCommitmentChange={setFilterCommitment}
                 onFilterItemKindChange={setFilterItemKind}
+                onDeadlineModeChange={setDeadlineMode}
             />
             
             {viewTransition ? (

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type { SearchScope, ViewMode } from "./calendar_logic";
+import type { DeadlineMode } from "./general_utils";
 
 interface HeaderControlsProps {
     effectiveViewMode: ViewMode;
@@ -17,6 +18,7 @@ interface HeaderControlsProps {
     filterCommitment: string;
     filterItemKind: string;
     taskTypes: string[];
+    deadlineMode: DeadlineMode;
     onPrev: () => void;
     onNext: () => void;
     onToday: () => void;
@@ -33,6 +35,7 @@ interface HeaderControlsProps {
     onSearchScopeChange: (scope: SearchScope) => void;
     onFilterCommitmentChange: (value: string) => void;
     onFilterItemKindChange: (value: string) => void;
+    onDeadlineModeChange: (mode: DeadlineMode) => void;
 }
 
 export function HeaderControls({
@@ -51,11 +54,12 @@ export function HeaderControls({
     filterCommitment,
     filterItemKind,
     taskTypes,
+    deadlineMode,
     onPrev,
     onNext,
     onToday,
     onJumpToDate,
-    onOpenCreateEvent,
+    // onOpenCreateEvent,
     onOpenAiChat,
     onOpenSosPlanner,
     onSyncGoogleCalendar,
@@ -67,6 +71,7 @@ export function HeaderControls({
     onSearchScopeChange,
     onFilterCommitmentChange,
     onFilterItemKindChange,
+    onDeadlineModeChange,
 }: HeaderControlsProps) {
     const [isJumpToDateOpen, setIsJumpToDateOpen] = useState(false);
     const [jumpSelectedDate, setJumpSelectedDate] = useState(() => new Date(currentDisplayDate));
@@ -245,6 +250,9 @@ export function HeaderControls({
                     <button className={`view-btn ${effectiveViewMode === 'week' ? 'active' : ''}`} onClick={() => onViewChange('week')} disabled={viewTransitionActive}>week</button>
                     <button className={`view-btn ${effectiveViewMode === 'day' ? 'active' : ''}`} onClick={() => onViewChange('day')} disabled={viewTransitionActive}>day</button>
                     <button className={`view-btn ${effectiveViewMode === 'list' ? 'active' : ''}`} onClick={() => onViewChange('list')} disabled={viewTransitionActive}>list</button>
+                    <span className="button-divider" aria-hidden="true" />
+                    <button className={`view-btn ${deadlineMode === 'actual' ? 'active' : ''}`} onClick={() => onDeadlineModeChange('actual')}>Actual</button>
+                    <button className={`view-btn ${deadlineMode === 'virtual' ? 'active' : ''}`} onClick={() => onDeadlineModeChange('virtual')}>Virtual</button>
                     <span className="button-divider" aria-hidden="true" />
                     <button
                         className={`view-btn view-btn-filters ${isHeaderToolsOpen ? 'active' : ''}`}

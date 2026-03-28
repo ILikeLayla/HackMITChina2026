@@ -1,4 +1,4 @@
-import { getTaskSortTime, parseTaskDate, type CalendarDay, type CalendarTask } from "./general_utils";
+import { getTaskSortTime, getTaskDisplayDate, parseTaskDate, type CalendarDay, type CalendarTask, type DeadlineMode } from "./general_utils";
 
 export const ADD_TYPE_OPTION_VALUE = '__add_new_type__';
 export const OTHER_TYPE = 'other';
@@ -51,6 +51,7 @@ export function filterAndSortTasks(
     searchScope: SearchScope,
     filterCommitment: string = 'all',
     filterItemKind: string = 'all',
+    deadlineMode: DeadlineMode = 'actual',
 ) {
     const normalizedKeyword = filterKeyword.trim().toLowerCase();
 
@@ -83,7 +84,7 @@ export function filterAndSortTasks(
             if (searchScope === 'time') {
                 const timeText = task.itemKind === 'event'
                     ? `${task.startTime} ${task.endTime}`
-                    : task.ddl;
+                    : `${task.ddl} ${task.virtualDeadlineDate} ${task.virtualDeadlineTime}`;
                 return timeText.toLowerCase().includes(normalizedKeyword);
             }
 
@@ -91,19 +92,19 @@ export function filterAndSortTasks(
                 return task.type.toLowerCase().includes(normalizedKeyword);
             }
 
-            const keywordPool = `${task.title} ${task.note} ${task.ddl} ${task.startTime} ${task.endTime} ${task.type} ${task.itemKind} ${task.commitmentCategory ?? ''}`.toLowerCase();
+            const keywordPool = `${task.title} ${task.note} ${task.ddl} ${task.virtualDeadlineDate} ${task.virtualDeadlineTime} ${task.startTime} ${task.endTime} ${task.type} ${task.itemKind} ${task.commitmentCategory ?? ''}`.toLowerCase();
             return keywordPool.includes(normalizedKeyword);
         })
         .sort((a, b) => {
-            const dateA = parseTaskDate(a.date).getTime();
-            const dateB = parseTaskDate(b.date).getTime();
-            return dateA - dateB || getTaskSortTime(a).localeCompare(getTaskSortTime(b));
+            const dateA = parseTaskDate(getTaskDisplayDate(a, deadlineMode)).getTime();
+            const dateB = parseTaskDate(getTaskDisplayDate(b, deadlineMode)).getTime();
+            return dateA - dateB || getTaskSortTime(a, deadlineMode).localeCompare(getTaskSortTime(b, deadlineMode));
         });
 }
 
-export function getTasksForDayFromTasks(tasks: CalendarTask[], day: CalendarDay) {
+export function getTasksForDayFromTasks(tasks: CalendarTask[], day: CalendarDay, deadlineMode: DeadlineMode = 'actual') {
     return tasks.filter(task => {
-        const taskDate = parseTaskDate(task.date);
+        const taskDate = parseTaskDate(getTaskDisplayDate(task, deadlineMode));
         return (
             taskDate.getDate() === day.day &&
             taskDate.getMonth() === day.month &&
@@ -112,10 +113,10 @@ export function getTasksForDayFromTasks(tasks: CalendarTask[], day: CalendarDay)
     });
 }
 
-export function groupTasksByDate(tasks: CalendarTask[]) {
+export function groupTasksByDate(tasks: CalendarTask[], deadlineMode: DeadlineMode = 'actual') {
     return Object.entries(
         tasks.reduce((acc: Record<string, CalendarTask[]>, task) => {
-            const taskDate = parseTaskDate(task.date);
+            const taskDate = parseTaskDate(getTaskDisplayDate(task, deadlineMode));
             const key = `${taskDate.getFullYear()}-${taskDate.getMonth()}-${taskDate.getDate()}`;
             if (!acc[key]) {
                 acc[key] = [];

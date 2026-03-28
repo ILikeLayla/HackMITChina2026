@@ -1,6 +1,7 @@
 export type TaskType = string;
 export type CalendarItemKind = 'task' | 'event';
 export type TaskCommitmentCategory = 'hard_commitment' | 'flexible_work' | 'undetermined';
+export type DeadlineMode = 'actual' | 'virtual';
 
 export type AiPreviewStatus = 'ai-preview-new' | 'ai-preview-modified' | 'ai-preview-deleted';
 
@@ -12,6 +13,8 @@ export interface CalendarTask {
     commitmentCategory?: TaskCommitmentCategory;
     itemKind: CalendarItemKind;
     ddl: string;
+    virtualDeadlineDate: string;
+    virtualDeadlineTime: string;
     startTime: string;
     endTime: string;
     note: string;
@@ -66,17 +69,39 @@ export function parseTaskDate(dateStr: string) {
     return new Date(`${dateStr}T00:00:00`);
 }
 
-export function getTaskSortTime(task: CalendarTask) {
-    return task.itemKind === 'event' ? task.startTime : task.ddl;
+export function getTaskDisplayDate(task: CalendarTask, mode: DeadlineMode = 'actual') {
+    if (task.itemKind === 'event') {
+        return task.date;
+    }
+    if (mode === 'actual') {
+        return task.date;
+    }
+    return task.virtualDeadlineDate || task.date;
 }
 
-export function getTaskDisplayTime(task: CalendarTask) {
+export function getTaskSortTime(task: CalendarTask, mode: DeadlineMode = 'actual') {
+    if (task.itemKind === 'event') {
+        return task.startTime;
+    }
+    return mode === 'actual' ? task.ddl : task.virtualDeadlineTime;
+}
+
+export function getTaskDisplayTime(task: CalendarTask, mode: DeadlineMode = 'actual') {
     if (task.itemKind === 'event') {
         const start = task.startTime || '--:--';
         const end = task.endTime || '--:--';
         return `${start} - ${end}`;
     }
-    return `DDL ${task.ddl || '--:--'}`;
+    const deadline = mode === 'actual' ? task.ddl : task.virtualDeadlineTime;
+    const prefix = mode === 'actual' ? 'DDL' : 'VDDL';
+    return `${prefix} ${deadline || '--:--'}`;
+}
+
+export function getTaskDeadline(task: CalendarTask, mode: DeadlineMode = 'actual') {
+    if (task.itemKind === 'event') {
+        return task.startTime;
+    }
+    return mode === 'actual' ? task.ddl : task.virtualDeadlineTime;
 }
 
 export function isValidHexColor(value: string) {
