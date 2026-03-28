@@ -412,6 +412,10 @@
     border: 1px solid #444;
   }
 
+  .day-view-date {
+    background-color: #333;
+  }
+
   .day-view-date.today {
     color: #64b5f6;
   }

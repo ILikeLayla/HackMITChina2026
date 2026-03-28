@@ -859,7 +859,7 @@ body {
   }
 }
 
-@media (max-width: 795px) {
+@media (max-width: 806px) {
   .calendar-container {
     padding: 10px;
     animation: responsive-layout-shift 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
