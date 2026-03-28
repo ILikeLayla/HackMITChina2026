@@ -30,4 +30,6 @@ sha2 = "0.10"
 base64 = "0.22"
 open = "5"
 urlencoding = "2"
+dotenv = "0.15.0"
+
 
