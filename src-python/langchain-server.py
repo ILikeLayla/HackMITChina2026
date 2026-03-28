@@ -11,6 +11,7 @@ if not os.getenv("DEEPSEEK_API_KEY"):
 
 
 import asyncio
+import contextvars
 import websockets
 import json
 import logging
@@ -42,6 +43,7 @@ calendar_query_results: dict[str, asyncio.Future] = {}
 active_websocket = None
 allow_restart_on_disconnect = AUTO_RESTART_ON_DISCONNECT
 shutdown_event = asyncio.Event()
+current_ai_thread_id = contextvars.ContextVar("current_ai_thread_id", default="default_thread")
 
 from langchain_deepseek import ChatDeepSeek
 
@@ -151,6 +153,8 @@ async def create_calendar_event(
         startTime: The event start time in HH:MM format.
         endTime: The event end time in HH:MM format.
         notes: Additional notes for the event.
+
+    BE VERY CAREFUL NOT TO CREATE DUPLICATE EVENTS!
     """
     logger.info(
         "create_calendar_event called with title=%s date=%s type=%s start=%s end=%s",
@@ -414,6 +418,35 @@ async def show_task_cards(
         return f"Failed to show task cards: {message}"
 
     return f"Displayed {result_payload.get('count', 0)} task card(s) in chat."
+
+
+@tool
+async def update_ai_progress(percent: int, status: str, is_active: bool = True):
+    """Push AI progress updates to the frontend chat progress bar for the current thread.
+
+    Args:
+        percent: Progress percent (0-100).
+        status: Short progress status text.
+        is_active: Whether the progress is still active.
+    """
+    if active_websocket is None:
+        logger.warning("update_ai_progress called without active websocket")
+        return "Failed to update progress: No active websocket client connection."
+
+    clamped_percent = max(0, min(100, int(percent)))
+    status_text = (status or "").strip() or "AI is working..."
+    thread_id = current_ai_thread_id.get()
+    payload = {
+        "thread_id": thread_id,
+        "percent": clamped_percent,
+        "status": status_text,
+        "is_active": bool(is_active),
+        "mode": "sos",
+    }
+
+    await active_websocket.send(f"ai_progress_update: {json.dumps(payload)}")
+    logger.info("Sent ai_progress_update for thread %s: %s%% %s", thread_id, clamped_percent, status_text)
+    return f"Progress updated: {clamped_percent}% - {status_text}"
     
 @tool
 def get_time_now():
@@ -439,6 +472,7 @@ task_creation_agent = create_agent(
         delete_task_type,
         get_all_task_type_colors,
         show_task_cards,
+        update_ai_progress,
         get_time_now,
     ],
     checkpointer=InMemorySaver(),
@@ -447,11 +481,15 @@ task_creation_agent = create_agent(
 async def calendar_agent(user_message, current_thread_id):
     logger.info("calendar_agent called with user message: %s", user_message)
 
-    system_prompt = f"You are a helpful assistant that lives in a calendar application. You support two kinds of calendar items: task (with DDL) and event (with a start and end time). Use create_calendar_task for tasks and create_calendar_event for events. When creating items, create new item types with appropriate color when necessary. When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks)."
+    system_prompt = f"You are a helpful assistant that lives in a calendar application. You support two kinds of calendar items: task (with DDL) and event (with a start and end time). Use create_calendar_task for tasks and create_calendar_event for events. When creating items, create new item types with appropriate color when necessary. When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks). For SOS or longer workflows, call update_ai_progress at key milestones and keep the status concise."
 
     initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
     logger.info("Invoking calendar agent")
-    response = await task_creation_agent.ainvoke({"messages": initial_messages}, {"configurable": {"thread_id": current_thread_id}})
+    token = current_ai_thread_id.set(current_thread_id)
+    try:
+        response = await task_creation_agent.ainvoke({"messages": initial_messages}, {"configurable": {"thread_id": current_thread_id}})
+    finally:
+        current_ai_thread_id.reset(token)
 
     response_content = response['messages'][-1].content if 'messages' in response and len(response['messages']) > 0 else str(response)
     logger.info("Extracted calendar agent response content: %s", response_content)

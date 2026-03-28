@@ -3,7 +3,7 @@ import { closeSnackbar, enqueueSnackbar } from "notistack";
 import { defaultTypeColors } from "./db_utils";
 import { buildDateString, OTHER_TYPE } from "./calendar_logic";
 import { isValidHexColor, type CalendarTask } from "./general_utils";
-import type { AiChatRole, AiTaskPreview } from "./ai_chat";
+import type { AiChatRole, AiTaskPreview, AiThreadProgress } from "./ai_chat";
 
 export interface GatewaySnackbarRefs {
     wsDisconnectedSnackbarIdRef: MutableRefObject<string | number | null>;
@@ -29,7 +29,8 @@ export interface WebSocketGatewayParams extends GatewaySnackbarRefs {
     setTaskTypeColors: Dispatch<SetStateAction<Record<string, string>>>;
     setModalDraft: Dispatch<SetStateAction<Omit<CalendarTask, 'id' | 'date'> | null>>;
     setFilterType: Dispatch<SetStateAction<string>>;
-    stopAiSubmitting: () => void;
+    setAiThreadProgress: (threadId: string, progress: AiThreadProgress) => void;
+    stopAiSubmitting: (options?: { closeConnection?: boolean; reason?: 'completed' | 'failed' | 'canceled' | 'interrupted' }) => void;
     connectWebSocket: () => void;
     appendMessageToThread: (
         threadId: string,
@@ -235,6 +236,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
         setTaskTypeColors,
         setModalDraft,
         setFilterType,
+        setAiThreadProgress,
         stopAiSubmitting,
         connectWebSocket,
         appendMessageToThread,
@@ -327,7 +329,38 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
             const targetThreadId = pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current;
             appendMessageToThread(targetThreadId, 'assistant', resultText || 'AI finished, but returned an empty result.');
             if (isAiSubmittingRef.current) {
-                stopAiSubmitting();
+                stopAiSubmitting({ reason: 'completed' });
+            }
+        }
+
+        if (typeof event.data === 'string' && event.data.startsWith('ai_progress_update: ')) {
+            const payloadText = event.data.substring('ai_progress_update: '.length);
+            try {
+                const payload = JSON.parse(payloadText) as {
+                    thread_id?: string;
+                    percent?: number;
+                    status?: string;
+                    is_active?: boolean;
+                    mode?: 'sos' | 'chat';
+                };
+
+                const targetThreadId = payload.thread_id?.trim() || pendingAiRequestThreadIdRef.current || activeAiThreadIdRef.current;
+                const clampedPercent = Math.max(0, Math.min(100, Number(payload.percent) || 0));
+                const statusText = (payload.status ?? '').trim() || 'AI is working...';
+                const isActive = payload.is_active !== false;
+
+                setAiThreadProgress(targetThreadId, {
+                    percent: clampedPercent,
+                    status: statusText,
+                    isActive,
+                    mode: payload.mode === 'chat' ? 'chat' : 'sos',
+                });
+
+                if (isAiSubmittingRef.current && targetThreadId === pendingAiRequestThreadIdRef.current) {
+                    aiRequestDeadlineRef.current = Date.now() + aiRequestTimeoutMs;
+                }
+            } catch (error) {
+                console.error('Failed to parse ai_progress_update payload:', error);
             }
         }
 
@@ -854,7 +887,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
             if (pendingThreadId) {
                 appendMessageToThread(pendingThreadId, 'system', 'Connection was lost while waiting for AI response.');
             }
-            stopAiSubmitting();
+            stopAiSubmitting({ reason: 'failed' });
             enqueueSnackbar('Connection lost while waiting for AI response.', { variant: 'warning' });
         }
 
@@ -874,7 +907,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
             if (pendingThreadId) {
                 appendMessageToThread(pendingThreadId, 'system', 'Connection error occurred while waiting for AI response.');
             }
-            stopAiSubmitting();
+            stopAiSubmitting({ reason: 'failed' });
             enqueueSnackbar('Connection error while waiting for AI response.', { variant: 'warning' });
         }
         if (!isUnmountingRef.current) {

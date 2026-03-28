@@ -19,6 +19,7 @@ interface HeaderControlsProps {
     onToday: () => void;
     onOpenCreateEvent: () => void;
     onOpenAiChat: () => void;
+    onOpenSosPlanner: () => void;
     onSyncGoogleCalendar: () => void;
     isGoogleSyncing: boolean;
     onViewChange: (mode: ViewMode) => void;
@@ -46,6 +47,7 @@ export function HeaderControls({
     onToday,
     onOpenCreateEvent,
     onOpenAiChat,
+    onOpenSosPlanner,
     onSyncGoogleCalendar,
     isGoogleSyncing,
     onViewChange,
@@ -77,6 +79,7 @@ export function HeaderControls({
                     <button className="nav-btn" onClick={onSyncGoogleCalendar} disabled={isGoogleSyncing}>
                         {isGoogleSyncing ? 'syncing...' : 'sync google'}
                     </button>
+                    <button className="nav-btn nav-sos-btn" onClick={onOpenSosPlanner}>SOS</button>
                 </div>
 
                 <div className="calendar-title">{displayTitle}</div>

@@ -51,7 +51,7 @@ import {
     type CalendarTask,
 } from "./general_utils";
 import { SnackbarProvider, closeSnackbar, enqueueSnackbar } from 'notistack';
-import { AiChatModal, type AiChatRole, type AiChatThread, type AiTaskPreview } from "./ai_chat";
+import { AiChatModal, type AiChatRole, type AiChatThread, type AiTaskPreview, type AiThreadProgress } from "./ai_chat";
 import { TaskModal } from "./task_modal";
 import { TypeModal } from "./type_modal";
 import { HeaderControls } from "./header_controls";
@@ -72,6 +72,7 @@ const FILTER_REFRESH_ANIMATION_MS = 180;
 const AI_REQUEST_TIMEOUT_MS = 180000;
 const GOOGLE_SYNC_TYPE = 'google';
 const GOOGLE_SYNC_TIMEOUT_MS = 120000;
+const DEFAULT_SOS_USER_PROMPT = 'Please automatically reorganize my most important tasks for today and the near term, prioritize urgent high-impact work, and give me an actionable finish plan.';
 
 interface GoogleCalendarSelectionItem {
     id: string;
@@ -82,6 +83,14 @@ interface GoogleCalendarSyncSession {
     accessToken: string;
     calendars: GoogleCalendarSelectionItem[];
 }
+
+interface SosPlannerDraft {
+    userPrompt: string;
+}
+
+type AiSubmitSource = 'chat' | 'sos';
+
+type StopAiSubmitReason = 'completed' | 'failed' | 'canceled' | 'interrupted';
 
 function MainCalendar() {
     const createAiMessageId = () => `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -101,6 +110,10 @@ function MainCalendar() {
         updatedAt: Date.now(),
     });
 
+    const buildDefaultSosPlannerDraft = (): SosPlannerDraft => ({
+        userPrompt: DEFAULT_SOS_USER_PROMPT,
+    });
+
     const [currentDate, setCurrentDate] = useState(new Date());
     const [viewMode, setViewMode] = useState<ViewMode>('month');
     const [dateTransition, setDateTransition] = useState<DateTransitionState | null>(null);
@@ -117,9 +130,13 @@ function MainCalendar() {
     const [isAiModalOpen, setIsAiModalOpen] = useState(false);
     const [isAiModalClosing, setIsAiModalClosing] = useState(false);
     const [isAiSubmitting, setIsAiSubmitting] = useState(false);
+    const [isSosModalOpen, setIsSosModalOpen] = useState(false);
+    const [isSosModalClosing, setIsSosModalClosing] = useState(false);
+    const [sosPlannerDraft, setSosPlannerDraft] = useState<SosPlannerDraft>(() => buildDefaultSosPlannerDraft());
     const [aiChatInput, setAiChatInput] = useState('');
     const [aiThreads, setAiThreads] = useState<AiChatThread[]>(() => [createDefaultAiThread()]);
     const [activeAiThreadId, setActiveAiThreadId] = useState('default_thread');
+    const [aiThreadProgressById, setAiThreadProgressById] = useState<Record<string, AiThreadProgress>>({});
     const [typeModalMode, setTypeModalMode] = useState<'create' | 'edit'>('create');
     const [typeEditingOriginalName, setTypeEditingOriginalName] = useState<string | null>(null);
     const [typeDraftName, setTypeDraftName] = useState('');
@@ -142,6 +159,7 @@ function MainCalendar() {
     const taskModalCloseTimerRef = useRef<number | null>(null);
     const typeModalCloseTimerRef = useRef<number | null>(null);
     const aiModalCloseTimerRef = useRef<number | null>(null);
+    const sosModalCloseTimerRef = useRef<number | null>(null);
     const filterRefreshTimerRef = useRef<number | null>(null);
     const filterRefreshRafRef = useRef<number | null>(null);
     const hasMountedFilterControlsRef = useRef(false);
@@ -172,6 +190,7 @@ function MainCalendar() {
     const googleSyncTimedOutRef = useRef(false);
     const activeAiThreadIdRef = useRef(activeAiThreadId);
     const pendingAiRequestThreadIdRef = useRef<string | null>(null);
+    const pendingAiRequestSourceRef = useRef<AiSubmitSource | null>(null);
     const isManualWsCloseRef = useRef(false);
     const isAiSubmittingRef = useRef(false);
     const isWindowCloseCleanupRunningRef = useRef(false);
@@ -326,11 +345,47 @@ function MainCalendar() {
         }
     };
 
-    const stopAiSubmitting = (options?: { closeConnection?: boolean }) => {
+    const updateThreadProgress = (threadId: string, progress: AiThreadProgress) => {
+        setAiThreadProgressById(prev => ({
+            ...prev,
+            [threadId]: progress,
+        }));
+    };
+
+    const stopAiSubmitting = (options?: { closeConnection?: boolean; reason?: StopAiSubmitReason }) => {
+        const reason = options?.reason ?? 'interrupted';
+        const pendingThreadId = pendingAiRequestThreadIdRef.current;
+        const pendingSource = pendingAiRequestSourceRef.current;
+
         clearAiResultPollTimer();
         aiRequestDeadlineRef.current = null;
         pendingAiRequestThreadIdRef.current = null;
+        pendingAiRequestSourceRef.current = null;
         setIsAiSubmitting(false);
+
+        if (pendingSource === 'sos' && pendingThreadId) {
+            setAiThreadProgressById(prev => {
+                const existing = prev[pendingThreadId];
+                const basePercent = existing ? existing.percent : 0;
+                const finalProgress: AiThreadProgress = {
+                    percent: reason === 'completed' ? 100 : Math.min(100, Math.max(8, basePercent)),
+                    status: reason === 'completed'
+                        ? 'SOS plan ready. Continue chatting below to refine it.'
+                        : reason === 'canceled'
+                            ? 'SOS run canceled. You can restart from the SOS button anytime.'
+                            : reason === 'failed'
+                                ? 'SOS run failed. Please adjust the range or try again.'
+                                : 'SOS run interrupted.',
+                    isActive: false,
+                    mode: 'sos',
+                };
+
+                return {
+                    ...prev,
+                    [pendingThreadId]: finalProgress,
+                };
+            });
+        }
 
         if (options?.closeConnection) {
             const socket = ws.current;
@@ -349,7 +404,7 @@ function MainCalendar() {
 
         const pendingThreadId = pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current;
         appendMessageToThread(pendingThreadId, 'system', reasonMessage);
-        stopAiSubmitting({ closeConnection: true });
+        stopAiSubmitting({ closeConnection: true, reason: 'canceled' });
     };
 
     const appendMessageToThread = (
@@ -471,6 +526,7 @@ function MainCalendar() {
             setTaskTypeColors,
             setModalDraft,
             setFilterType,
+            setAiThreadProgress: updateThreadProgress,
             stopAiSubmitting,
             connectWebSocket,
             appendMessageToThread,
@@ -485,7 +541,7 @@ function MainCalendar() {
 
         return () => {
             isUnmountingRef.current = true;
-            stopAiSubmitting();
+            stopAiSubmitting({ reason: 'interrupted' });
             stopGoogleSyncProgressIndicators();
             googleSyncRequestIdRef.current = null;
             googleSyncAbortRejectRef.current = null;
@@ -516,7 +572,7 @@ function MainCalendar() {
 
                 await requestServerShutdown();
 
-                stopAiSubmitting();
+                stopAiSubmitting({ reason: 'interrupted' });
                 clearWsDisconnectedSnackbar();
                 clearWsReconnectingSnackbar();
 
@@ -589,6 +645,13 @@ function MainCalendar() {
         if (aiModalCloseTimerRef.current !== null) {
             window.clearTimeout(aiModalCloseTimerRef.current);
             aiModalCloseTimerRef.current = null;
+        }
+    };
+
+    const clearSosModalCloseTimer = () => {
+        if (sosModalCloseTimerRef.current !== null) {
+            window.clearTimeout(sosModalCloseTimerRef.current);
+            sosModalCloseTimerRef.current = null;
         }
     };
 
@@ -697,6 +760,7 @@ function MainCalendar() {
             clearTaskModalCloseTimer();
             clearTypeModalCloseTimer();
             clearAiModalCloseTimer();
+            clearSosModalCloseTimer();
             clearFilterRefreshAnimation();
             stopGoogleSyncProgressIndicators();
         };
@@ -1000,8 +1064,145 @@ function MainCalendar() {
         clearAiModalCloseTimer();
         setIsAiModalClosing(false);
         setIsAiModalOpen(true);
-        setIsAiSubmitting(false);
         setAiChatInput('');
+    };
+
+    const openSosPlannerModal = () => {
+        clearSosModalCloseTimer();
+        setIsSosModalClosing(false);
+        setSosPlannerDraft(prev => ({
+            userPrompt: prev.userPrompt.trim() ? prev.userPrompt : DEFAULT_SOS_USER_PROMPT,
+        }));
+        setIsSosModalOpen(true);
+    };
+
+    const closeSosPlannerModal = () => {
+        if (!isSosModalOpen || isSosModalClosing) {
+            return;
+        }
+
+        setIsSosModalClosing(true);
+        clearSosModalCloseTimer();
+        sosModalCloseTimerRef.current = window.setTimeout(() => {
+            setIsSosModalOpen(false);
+            setIsSosModalClosing(false);
+            sosModalCloseTimerRef.current = null;
+        }, MODAL_CLOSE_ANIMATION_MS);
+    };
+
+    const sendAiRequest = (options: {
+        threadId: string;
+        userInput: string;
+        source: AiSubmitSource;
+    }) => {
+        const { threadId, userInput, source } = options;
+        setIsAiSubmitting(true);
+        pendingAiRequestThreadIdRef.current = threadId;
+        pendingAiRequestSourceRef.current = source;
+
+        const timeoutMs = AI_REQUEST_TIMEOUT_MS;
+        aiRequestDeadlineRef.current = Date.now() + timeoutMs;
+
+        if (source === 'sos') {
+            updateThreadProgress(threadId, {
+                percent: 0,
+                status: 'Waiting for AI progress updates...',
+                isActive: true,
+                mode: 'sos',
+            });
+        }
+
+        if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+            appendMessageToThread(threadId, 'system', 'Unable to send because AI service is disconnected.');
+            stopAiSubmitting({ reason: 'failed' });
+            enqueueWsDisconnectedSnackbar();
+            return;
+        }
+
+        ws.current?.send(`ai_message: ${JSON.stringify({
+            message: userInput,
+            thread_id: threadId,
+        })}`);
+
+        aiResultPollTimerRef.current = window.setTimeout(() => {
+            if (!isAiSubmittingRef.current) {
+                return;
+            }
+
+            if (aiRequestDeadlineRef.current !== null && Date.now() > aiRequestDeadlineRef.current) {
+                appendMessageToThread(threadId, 'system', 'AI response timed out. Please try again.');
+                stopAiSubmitting({ reason: 'failed' });
+            }
+        }, timeoutMs + 50);
+    };
+
+    const runSosPlannerWithDraft = (draft: SosPlannerDraft) => {
+        if (isAiSubmittingRef.current) {
+            enqueueSnackbar('Please wait for the current AI request to finish.', { variant: 'info' });
+            return;
+        }
+
+        const userIntent = draft.userPrompt.trim() || DEFAULT_SOS_USER_PROMPT;
+
+        const threadId = createAiThreadId();
+        const now = Date.now();
+        const titleSnippet = userIntent.length > 18 ? `${userIntent.slice(0, 18)}...` : userIntent;
+        const title = `SOS ${titleSnippet}`;
+        const sosPrompt = [
+            'SOS MODE: I need an emergency schedule rescue.',
+            `User intent: ${userIntent}`,
+            '',
+            'Rules:',
+            '- Fetch calendar tasks/events yourself via the available tools before planning.',
+            '- Call update_ai_progress at major milestones with meaningful status text.',
+            '- You must actively re-plan and re-arrange tasks/events, not just analyze them.',
+            '- Do not return an analysis-only response.',
+            '- Produce a concrete revised schedule with specific task order and time blocks.',
+            '- Prioritize urgent and high-impact work first.',
+            '- Resolve conflicts and provide realistic buffers.',
+            '- Return a concise completion analysis with checkpoints, order, and estimated finish times.',
+            '- Use markdown headings and a numbered action analysis.',
+        ].join('\n');
+
+        const newThread: AiChatThread = {
+            id: threadId,
+            title,
+            messages: [
+                {
+                    id: createAiMessageId(),
+                    role: 'assistant',
+                    text: 'SOS planner started. I will rearrange your schedule based on your sentence and return an executable finish plan.',
+                    createdAt: now,
+                },
+                {
+                    id: createAiMessageId(),
+                    role: 'user',
+                    text: sosPrompt,
+                    createdAt: now + 1,
+                },
+            ],
+            createdAt: now,
+            updatedAt: now + 1,
+        };
+
+        setAiThreads(prev => [newThread, ...prev]);
+        setActiveAiThreadId(threadId);
+        closeSosPlannerModal();
+
+        clearAiModalCloseTimer();
+        setIsAiModalClosing(false);
+        setIsAiModalOpen(true);
+        setAiChatInput('');
+
+        sendAiRequest({
+            threadId,
+            userInput: sosPrompt,
+            source: 'sos',
+        });
+    };
+
+    const runSosPlanner = () => {
+        runSosPlannerWithDraft(sosPlannerDraft);
     };
 
     const closeAiCreateModal = () => {
@@ -1069,35 +1270,11 @@ function MainCalendar() {
         updateThreadTitleFromFirstUserMessage(targetThreadId, userInput);
         setAiChatInput('');
 
-        setIsAiSubmitting(true);
-        pendingAiRequestThreadIdRef.current = targetThreadId;
-        console.log('AI chat message:', userInput);
-
-        const timeoutMs = AI_REQUEST_TIMEOUT_MS;
-        aiRequestDeadlineRef.current = Date.now() + timeoutMs;
-
-        if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
-            appendMessageToThread(targetThreadId, 'system', 'Unable to send because AI service is disconnected.');
-            stopAiSubmitting();
-            enqueueWsDisconnectedSnackbar();
-            return;
-        }
-
-        ws.current?.send(`ai_message: ${JSON.stringify({
-            message: userInput,
-            thread_id: targetThreadId,
-        })}`);
-
-        aiResultPollTimerRef.current = window.setTimeout(() => {
-            if (!isAiSubmittingRef.current) {
-                return;
-            }
-
-            if (aiRequestDeadlineRef.current !== null && Date.now() > aiRequestDeadlineRef.current) {
-                appendMessageToThread(targetThreadId, 'system', 'AI response timed out. Please try again.');
-                stopAiSubmitting();
-            }
-        }, timeoutMs + 50);
+        sendAiRequest({
+            threadId: targetThreadId,
+            userInput,
+            source: 'chat',
+        });
     };
 
     const openTypeCreateModal = () => {
@@ -1496,6 +1673,7 @@ function MainCalendar() {
                 : `${displayDate.toLocaleString('default', { month: 'long' })} ${displayDate.getFullYear()}`;
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
     const activeAiThread = aiThreads.find(thread => thread.id === activeAiThreadId) ?? aiThreads[0] ?? null;
+    const activeThreadProgress = aiThreadProgressById[activeAiThreadId] ?? null;
     const shouldElevateTaskModal = Boolean(isAiModalOpen && modalDraft);
     const shouldElevateTypeModal = Boolean(isAiModalOpen && isTypeModalOpen);
 
@@ -1527,6 +1705,7 @@ function MainCalendar() {
                 onToday={handleToday}
                 onOpenCreateEvent={() => openCreateTaskModal(new Date())}
                 onOpenAiChat={openAiCreateModal}
+                onOpenSosPlanner={openSosPlannerModal}
                 onSyncGoogleCalendar={syncGoogleCalendar}
                 isGoogleSyncing={isGoogleSyncing || isGoogleCalendarPickerOpen}
                 onViewChange={handleViewChange}
@@ -1681,6 +1860,36 @@ function MainCalendar() {
                 </div>
             )}
 
+            {isSosModalOpen && (
+                <div className={`task-modal-backdrop ${isSosModalClosing ? 'closing' : ''}`} onClick={closeSosPlannerModal}>
+                    <div className={`task-modal sos-planner-modal ${isSosModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
+                        <div className="task-modal-header">
+                            <h2>SOS Schedule Rescue</h2>
+                            <button className="task-modal-close" onClick={closeSosPlannerModal}>x</button>
+                        </div>
+
+                        <p className="task-modal-meta">
+                            Enter one sentence to tell AI how to auto-plan your schedule. You can also run with the default prompt.
+                        </p>
+
+                        <label className="task-modal-label" htmlFor="sos-user-prompt">One-line request (optional)</label>
+                        <textarea
+                            id="sos-user-prompt"
+                            className="task-modal-textarea"
+                            value={sosPlannerDraft.userPrompt}
+                            placeholder={DEFAULT_SOS_USER_PROMPT}
+                            onChange={(event) => setSosPlannerDraft(prev => ({ ...prev, userPrompt: event.target.value }))}
+                            disabled={isAiSubmitting}
+                        />
+
+                        <div className="task-modal-actions">
+                            <button className="task-modal-btn" onClick={closeSosPlannerModal} disabled={isAiSubmitting}>Cancel</button>
+                            <button className="task-modal-btn primary" onClick={runSosPlanner} disabled={isAiSubmitting}>Run SOS Plan</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <AiChatModal
                 isOpen={isAiModalOpen}
                 isClosing={isAiModalClosing}
@@ -1688,6 +1897,7 @@ function MainCalendar() {
                 aiThreads={aiThreads}
                 activeAiThreadId={activeAiThreadId}
                 activeAiThread={activeAiThread}
+                activeThreadProgress={activeThreadProgress}
                 aiChatInput={aiChatInput}
                 aiMessagesEndRef={aiMessagesEndRef}
                 onBackdropClose={closeAiCreateModal}

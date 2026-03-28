@@ -32,6 +32,13 @@ export type AiChatThread = {
     updatedAt: number;
 };
 
+export type AiThreadProgress = {
+    percent: number;
+    status: string;
+    isActive: boolean;
+    mode?: 'sos' | 'chat';
+};
+
 interface AiChatModalProps {
     isOpen: boolean;
     isClosing: boolean;
@@ -39,6 +46,7 @@ interface AiChatModalProps {
     aiThreads: AiChatThread[];
     activeAiThreadId: string;
     activeAiThread: AiChatThread | null;
+    activeThreadProgress?: AiThreadProgress | null;
     aiChatInput: string;
     aiMessagesEndRef: React.RefObject<HTMLDivElement | null>;
     onBackdropClose: () => void;
@@ -58,6 +66,7 @@ export function AiChatModal({
     aiThreads,
     activeAiThreadId,
     activeAiThread,
+    activeThreadProgress,
     aiChatInput,
     aiMessagesEndRef,
     onBackdropClose,
@@ -114,6 +123,19 @@ export function AiChatModal({
                     </div>
 
                     <div className="ai-chat-main">
+                        {activeThreadProgress && (
+                            <div className={`ai-chat-progress-panel ${activeThreadProgress.isActive ? 'active' : 'done'}`}>
+                                <div className="ai-chat-progress-head">
+                                    <span>{activeThreadProgress.mode === 'sos' ? 'SOS Planner Progress' : 'AI Progress'}</span>
+                                    <span>{`${Math.max(0, Math.min(100, Math.round(activeThreadProgress.percent)))}%`}</span>
+                                </div>
+                                <div className="ai-chat-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(0, Math.min(100, Math.round(activeThreadProgress.percent)))}>
+                                    <div className="ai-chat-progress-fill" style={{ width: `${Math.max(0, Math.min(100, activeThreadProgress.percent))}%` }} />
+                                </div>
+                                <div className="ai-chat-progress-status">{activeThreadProgress.status}</div>
+                            </div>
+                        )}
+
                         <div className="ai-chat-messages" aria-live="polite">
                             {activeAiThread?.messages.map(message => (
                                 <div

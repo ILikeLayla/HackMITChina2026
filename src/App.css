@@ -169,6 +169,17 @@ body {
   background: #edf3ff;
 }
 
+.nav-sos-btn {
+  color: #b42318;
+  border-color: #f0b4ad;
+  background: #fff1ef;
+  font-weight: 700;
+}
+
+.nav-sos-btn:hover:not(:disabled) {
+  background: #ffd8d4;
+}
+
 .calendar-title {
   padding-top: 2px;
   font-size: 20px;
@@ -638,6 +649,10 @@ body {
   width: min(560px, 100%);
 }
 
+.sos-planner-modal {
+  width: min(620px, 100%);
+}
+
 .google-calendar-picker-actions-row {
   display: flex;
   gap: 10px;
@@ -798,6 +813,16 @@ body {
   .today-btn:hover:not(:disabled),
   .view-btn:hover:not(:disabled) {
     background: #3a3a3a;
+  }
+
+  .nav-sos-btn {
+    color: #ffb4ab;
+    border-color: #7f3a34;
+    background: #4a2420;
+  }
+
+  .nav-sos-btn:hover:not(:disabled) {
+    background: #5b2d28;
   }
 
   .view-btn.active:hover {
