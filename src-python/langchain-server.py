@@ -393,7 +393,7 @@ task_creation_agent = create_agent(
 async def calendar_agent(user_message, current_thread_id):
     logger.info("calendar_agent called with user message: %s", user_message)
 
-    system_prompt = f"You are a helpful assistant that lives in a calendar application. You will answer user questions related to their calendar and create calendar tasks based on user requests. Please use existing task type as much as possible, if not, note to check if the type color of the newly created task is appropriate after creation. When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks)."
+    system_prompt = f"You are a helpful assistant that lives in a calendar application. You will answer user questions related to their calendar and create calendar tasks based on user requests. Note to check if the type color of the newly created task is appropriate after creation. When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks)."
 
     initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
     logger.info("Invoking calendar agent")
