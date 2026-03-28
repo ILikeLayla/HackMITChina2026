@@ -634,6 +634,64 @@ body {
   width: min(520px, 100%);
 }
 
+.google-calendar-picker-modal {
+  width: min(560px, 100%);
+}
+
+.google-calendar-picker-actions-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.google-calendar-picker-list {
+  border: 1px solid #e0e0e0;
+  border-radius: 10px;
+  max-height: min(46vh, 360px);
+  overflow-y: auto;
+  padding: 6px;
+  margin-bottom: 12px;
+}
+
+.google-calendar-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.google-calendar-picker-item:hover {
+  background: #f4f7ff;
+}
+
+.google-calendar-picker-item input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.google-calendar-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sync-snackbar-cancel-btn {
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-radius: 7px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.sync-snackbar-cancel-btn:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
 
 .type-color-picker-row {
   display: grid;
@@ -761,6 +819,14 @@ body {
   .task-modal {
     background: #2f2f2f;
     border: 1px solid #444;
+  }
+
+  .google-calendar-picker-list {
+    border-color: #464646;
+  }
+
+  .google-calendar-picker-item:hover {
+    background: #3a3a3a;
   }
 
   .task-modal-meta {

@@ -4,6 +4,7 @@ import { isValidHexColor } from "./general_utils";
 export const TASKS_DB_KEY = 'mvp-calendar-tasks';
 export const TASK_TYPES_DB_KEY = 'mvp-calendar-task-types';
 export const TASK_TYPE_COLORS_DB_KEY = 'mvp-calendar-task-type-colors';
+export const GOOGLE_EVENT_TASK_MAP_DB_KEY = 'mvp-calendar-google-event-task-map';
 
 export const seedTasks: CalendarTask[] = [
 ];
@@ -107,4 +108,36 @@ export function saveTaskTypesToTempDb(types: string[]) {
         return;
     }
     window.localStorage.setItem(TASK_TYPES_DB_KEY, JSON.stringify(types));
+}
+
+export function loadGoogleEventTaskMapFromTempDb(): Record<string, number> {
+    if (typeof window === 'undefined') {
+        return {};
+    }
+
+    const raw = window.localStorage.getItem(GOOGLE_EVENT_TASK_MAP_DB_KEY);
+    if (!raw) {
+        return {};
+    }
+
+    try {
+        const parsed = JSON.parse(raw) as Record<string, number>;
+        const normalized: Record<string, number> = {};
+        for (const [eventKey, taskId] of Object.entries(parsed)) {
+            if (typeof eventKey === 'string' && Number.isInteger(taskId) && taskId > 0) {
+                normalized[eventKey] = taskId;
+            }
+        }
+        return normalized;
+    } catch {
+        return {};
+    }
+}
+
+export function saveGoogleEventTaskMapToTempDb(eventTaskMap: Record<string, number>) {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    window.localStorage.setItem(GOOGLE_EVENT_TASK_MAP_DB_KEY, JSON.stringify(eventTaskMap));
 }

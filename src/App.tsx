@@ -7,9 +7,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
     defaultTypeColors,
+    loadGoogleEventTaskMapFromTempDb,
     loadTaskTypeColorsFromTempDb,
     loadTasksFromTempDb,
     loadTaskTypesFromTempDb,
+    saveGoogleEventTaskMapToTempDb,
     saveTaskTypeColorsToTempDb,
     saveTasksToTempDb,
     saveTaskTypesToTempDb,
@@ -48,11 +50,15 @@ import {
     type CalendarDay,
     type CalendarTask,
 } from "./general_utils";
-import { SnackbarProvider, enqueueSnackbar } from 'notistack';
+import { SnackbarProvider, closeSnackbar, enqueueSnackbar } from 'notistack';
 import { AiChatModal, type AiChatRole, type AiChatThread, type AiTaskPreview } from "./ai_chat";
 import { TaskModal } from "./task_modal";
 import { TypeModal } from "./type_modal";
 import { HeaderControls } from "./header_controls";
+import {
+    buildTaskFromGoogleEvent,
+    type GoogleCalendarNormalizedEvent,
+} from "./google_calendar";
 import {
     clearWsDisconnectedSnackbar as clearWsDisconnectedSnackbarRef,
     clearWsReconnectingSnackbar as clearWsReconnectingSnackbarRef,
@@ -61,13 +67,21 @@ import {
     requestServerShutdown as requestServerShutdownGateway,
 } from "./websocket_gateway";
 
-async function get_events() {
-    console.log(await invoke('get_events'));
-}
-
 const MODAL_CLOSE_ANIMATION_MS = 180;
 const FILTER_REFRESH_ANIMATION_MS = 180;
 const AI_REQUEST_TIMEOUT_MS = 180000;
+const GOOGLE_SYNC_TYPE = 'google';
+const GOOGLE_SYNC_TIMEOUT_MS = 120000;
+
+interface GoogleCalendarSelectionItem {
+    id: string;
+    name: string;
+}
+
+interface GoogleCalendarSyncSession {
+    accessToken: string;
+    calendars: GoogleCalendarSelectionItem[];
+}
 
 function MainCalendar() {
     const createAiMessageId = () => `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -113,6 +127,11 @@ function MainCalendar() {
     const [filterType, setFilterType] = useState<string>('all');
     const [filterKeyword, setFilterKeyword] = useState('');
     const [searchScope, setSearchScope] = useState<SearchScope>('all');
+    const [isGoogleSyncing, setIsGoogleSyncing] = useState(false);
+    const [isGoogleCalendarPickerOpen, setIsGoogleCalendarPickerOpen] = useState(false);
+    const [googleCalendarOptions, setGoogleCalendarOptions] = useState<GoogleCalendarSelectionItem[]>([]);
+    const [selectedGoogleCalendarIds, setSelectedGoogleCalendarIds] = useState<string[]>([]);
+    const [googleSyncSession, setGoogleSyncSession] = useState<GoogleCalendarSyncSession | null>(null);
     const [isHeaderToolsOpen, setIsHeaderToolsOpen] = useState(false);
     const [isFilterRefreshActive, setIsFilterRefreshActive] = useState(false);
     const [filtersButtonWidth, setFiltersButtonWidth] = useState<number | null>(null);
@@ -143,6 +162,14 @@ function MainCalendar() {
     const wsReconnectingSnackbarIdRef = useRef<string | number | null>(null);
     const aiResultPollTimerRef = useRef<number | null>(null);
     const aiRequestDeadlineRef = useRef<number | null>(null);
+    const googleSyncSnackbarIdRef = useRef<string | number | null>(null);
+    const googleSyncCancelButtonIdRef = useRef<string | null>(null);
+    const googleSyncCountdownTimerRef = useRef<number | null>(null);
+    const googleSyncTimeoutTimerRef = useRef<number | null>(null);
+    const googleSyncRequestIdRef = useRef<string | null>(null);
+    const googleSyncAbortRejectRef = useRef<((error: Error) => void) | null>(null);
+    const googleSyncCanceledByUserRef = useRef(false);
+    const googleSyncTimedOutRef = useRef(false);
     const activeAiThreadIdRef = useRef(activeAiThreadId);
     const pendingAiRequestThreadIdRef = useRef<string | null>(null);
     const isManualWsCloseRef = useRef(false);
@@ -174,6 +201,123 @@ function MainCalendar() {
     useEffect(() => {
         activeAiThreadIdRef.current = activeAiThreadId;
     }, [activeAiThreadId]);
+
+    const createGoogleSyncRequestId = () => `google_sync_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    const clearGoogleSyncCountdownTimer = () => {
+        if (googleSyncCountdownTimerRef.current !== null) {
+            window.clearInterval(googleSyncCountdownTimerRef.current);
+            googleSyncCountdownTimerRef.current = null;
+        }
+    };
+
+    const clearGoogleSyncTimeoutTimer = () => {
+        if (googleSyncTimeoutTimerRef.current !== null) {
+            window.clearTimeout(googleSyncTimeoutTimerRef.current);
+            googleSyncTimeoutTimerRef.current = null;
+        }
+    };
+
+    const closeGoogleSyncSnackbar = () => {
+        if (googleSyncSnackbarIdRef.current !== null) {
+            closeSnackbar(googleSyncSnackbarIdRef.current);
+            googleSyncSnackbarIdRef.current = null;
+        }
+        googleSyncCancelButtonIdRef.current = null;
+    };
+
+    const stopGoogleSyncProgressIndicators = () => {
+        clearGoogleSyncCountdownTimer();
+        clearGoogleSyncTimeoutTimer();
+        closeGoogleSyncSnackbar();
+    };
+
+    const triggerGoogleSyncAbort = (reason: Error) => {
+        const reject = googleSyncAbortRejectRef.current;
+        if (reject) {
+            googleSyncAbortRejectRef.current = null;
+            reject(reason);
+        }
+    };
+
+    const requestCancelGoogleSync = async (reason: 'user' | 'timeout') => {
+        const syncRequestId = googleSyncRequestIdRef.current;
+
+        if (reason === 'user') {
+            googleSyncCanceledByUserRef.current = true;
+        } else {
+            googleSyncTimedOutRef.current = true;
+        }
+
+        if (syncRequestId) {
+            try {
+                await invoke('cancel_google_calendar_sync', { syncRequestId });
+            } catch (cancelError) {
+                console.error('Failed to request Google sync cancellation:', cancelError);
+            }
+        }
+
+        triggerGoogleSyncAbort(
+            reason === 'user'
+                ? new Error('Google Calendar sync canceled by user.')
+                : new Error('Google Calendar sync timed out.'),
+        );
+    };
+
+    const updateGoogleSyncCancelButtonLabel = (remainingSeconds: number) => {
+        if (!googleSyncCancelButtonIdRef.current) {
+            return;
+        }
+
+        const buttonElement = document.getElementById(googleSyncCancelButtonIdRef.current);
+        if (buttonElement) {
+            buttonElement.textContent = `Cancel (${remainingSeconds}s)`;
+        }
+    };
+
+    const showGoogleSyncSnackbar = (initialRemainingSeconds: number) => {
+        closeGoogleSyncSnackbar();
+
+        const buttonId = `google-sync-cancel-btn-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        googleSyncCancelButtonIdRef.current = buttonId;
+
+        googleSyncSnackbarIdRef.current = enqueueSnackbar(
+            'Waiting for Google OAuth authorization...',
+            {
+                variant: 'info',
+                persist: true,
+                action: () => (
+                    <button
+                        id={buttonId}
+                        type="button"
+                        className="sync-snackbar-cancel-btn"
+                        onClick={() => {
+                            void requestCancelGoogleSync('user');
+                        }}
+                    >
+                        {`Cancel (${initialRemainingSeconds}s)`}
+                    </button>
+                ),
+            },
+        );
+    };
+
+    const startGoogleSyncProgressIndicators = () => {
+        const deadline = Date.now() + GOOGLE_SYNC_TIMEOUT_MS;
+        const getRemainingSeconds = () => Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+
+        showGoogleSyncSnackbar(getRemainingSeconds());
+
+        clearGoogleSyncCountdownTimer();
+        googleSyncCountdownTimerRef.current = window.setInterval(() => {
+            updateGoogleSyncCancelButtonLabel(getRemainingSeconds());
+        }, 1000);
+
+        clearGoogleSyncTimeoutTimer();
+        googleSyncTimeoutTimerRef.current = window.setTimeout(() => {
+            void requestCancelGoogleSync('timeout');
+        }, GOOGLE_SYNC_TIMEOUT_MS);
+    };
 
     const clearAiResultPollTimer = () => {
         if (aiResultPollTimerRef.current !== null) {
@@ -339,6 +483,9 @@ function MainCalendar() {
         return () => {
             isUnmountingRef.current = true;
             stopAiSubmitting();
+            stopGoogleSyncProgressIndicators();
+            googleSyncRequestIdRef.current = null;
+            googleSyncAbortRejectRef.current = null;
             clearWsDisconnectedSnackbar();
             clearWsReconnectingSnackbar();
             ws.current?.close();
@@ -538,10 +685,6 @@ function MainCalendar() {
     };
 
     useEffect(() => {
-        void get_events();
-    }, []);
-
-    useEffect(() => {
         return () => {
             if (dateTransitionTimerRef.current !== null) {
                 window.clearTimeout(dateTransitionTimerRef.current);
@@ -552,6 +695,7 @@ function MainCalendar() {
             clearTypeModalCloseTimer();
             clearAiModalCloseTimer();
             clearFilterRefreshAnimation();
+            stopGoogleSyncProgressIndicators();
         };
     }, []);
 
@@ -1126,6 +1270,203 @@ function MainCalendar() {
         // }
     };
 
+    const getSyncErrorMessage = (error: unknown) => {
+        if (error instanceof Error && error.message.trim()) {
+            return error.message;
+        }
+
+        if (typeof error === 'string' && error.trim()) {
+            return error;
+        }
+
+        if (error && typeof error === 'object') {
+            const maybeMessage = (error as { message?: unknown }).message;
+            if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
+                return maybeMessage;
+            }
+
+            const maybeError = (error as { error?: unknown }).error;
+            if (typeof maybeError === 'string' && maybeError.trim()) {
+                return maybeError;
+            }
+
+            try {
+                const serialized = JSON.stringify(error);
+                if (serialized && serialized !== '{}') {
+                    return serialized;
+                }
+            } catch {
+                // Ignore serialization failures and fall through to default message.
+            }
+        }
+
+        return 'Unknown sync error';
+    };
+
+    const closeGoogleCalendarPicker = (clearSession = true) => {
+        setIsGoogleCalendarPickerOpen(false);
+        setGoogleCalendarOptions([]);
+        setSelectedGoogleCalendarIds([]);
+        if (clearSession) {
+            setGoogleSyncSession(null);
+        }
+    };
+
+    const toggleGoogleCalendarSelection = (calendarId: string) => {
+        setSelectedGoogleCalendarIds(prev => (
+            prev.includes(calendarId)
+                ? prev.filter(id => id !== calendarId)
+                : [...prev, calendarId]
+        ));
+    };
+
+    const syncGoogleCalendar = async () => {
+        if (isGoogleSyncing || isGoogleCalendarPickerOpen) {
+            return;
+        }
+
+        setIsGoogleSyncing(true);
+        googleSyncCanceledByUserRef.current = false;
+        googleSyncTimedOutRef.current = false;
+        googleSyncRequestIdRef.current = null;
+
+        const abortPromise = new Promise<never>((_, reject) => {
+            googleSyncAbortRejectRef.current = (error: Error) => reject(error);
+        });
+
+        startGoogleSyncProgressIndicators();
+        try {
+            const beginOAuthPromise = invoke<GoogleCalendarSyncSession>('begin_google_calendar_sync');
+            // Keep an attached rejection handler to avoid unhandled rejection when UI cancellation wins the race.
+            void beginOAuthPromise.catch(() => undefined);
+
+            const session = await Promise.race([
+                beginOAuthPromise,
+                abortPromise,
+            ]);
+
+            if (session.calendars.length === 0) {
+                enqueueSnackbar('No importable Google calendars found in this account.', { variant: 'warning' });
+                return;
+            }
+
+            setGoogleSyncSession(session);
+            setGoogleCalendarOptions(session.calendars);
+            setSelectedGoogleCalendarIds(session.calendars.map(calendar => calendar.id));
+            setIsGoogleCalendarPickerOpen(true);
+        } catch (error) {
+            if (googleSyncTimedOutRef.current) {
+                enqueueSnackbar('Google OAuth timed out and was canceled.', { variant: 'warning' });
+            } else if (googleSyncCanceledByUserRef.current) {
+                enqueueSnackbar('Google OAuth canceled.', { variant: 'info' });
+            } else {
+                console.error('Google Calendar sync setup failed:', error);
+                const message = getSyncErrorMessage(error);
+                enqueueSnackbar(`Google Calendar sync setup failed: ${message}`, { variant: 'error' });
+            }
+        } finally {
+            stopGoogleSyncProgressIndicators();
+            googleSyncAbortRejectRef.current = null;
+            googleSyncRequestIdRef.current = null;
+            googleSyncCanceledByUserRef.current = false;
+            googleSyncTimedOutRef.current = false;
+            setIsGoogleSyncing(false);
+        }
+    };
+
+    const confirmGoogleCalendarImport = async () => {
+        if (isGoogleSyncing || !googleSyncSession) {
+            return;
+        }
+
+        const selectedIds = [...selectedGoogleCalendarIds];
+        if (selectedIds.length === 0) {
+            enqueueSnackbar('Please select at least one calendar to import.', { variant: 'warning' });
+            return;
+        }
+
+        setIsGoogleCalendarPickerOpen(false);
+        setIsGoogleSyncing(true);
+
+        const syncRequestId = createGoogleSyncRequestId();
+        googleSyncRequestIdRef.current = syncRequestId;
+
+        try {
+            const googleEvents = await invoke<GoogleCalendarNormalizedEvent[]>('sync_google_calendar_events', {
+                accessToken: googleSyncSession.accessToken,
+                selectedCalendarIds: selectedIds,
+                syncRequestId,
+            });
+
+            const existingMap = loadGoogleEventTaskMapFromTempDb();
+
+            let nextId = nextTaskIdRef.current;
+            const nextTaskById = new Map<number, CalendarTask>();
+            const nextTaskOrder: number[] = [];
+            for (const task of tasksRef.current) {
+                nextTaskById.set(task.id, task);
+                nextTaskOrder.push(task.id);
+            }
+
+            const nextMap: Record<string, number> = {};
+            for (const googleEvent of googleEvents) {
+                const mappedTaskId = existingMap[googleEvent.eventKey];
+                const reusableTaskId = Number.isInteger(mappedTaskId) && nextTaskById.has(mappedTaskId)
+                    ? mappedTaskId
+                    : null;
+
+                const taskId = reusableTaskId ?? nextId;
+                if (reusableTaskId === null) {
+                    nextId += 1;
+                    nextTaskOrder.push(taskId);
+                }
+
+                nextMap[googleEvent.eventKey] = taskId;
+                nextTaskById.set(taskId, buildTaskFromGoogleEvent(googleEvent, taskId));
+            }
+
+            const staleTaskIds = new Set(
+                Object.entries(existingMap)
+                    .filter(([eventKey]) => !Object.prototype.hasOwnProperty.call(nextMap, eventKey))
+                    .map(([, taskId]) => taskId)
+                    .filter(taskId => Number.isInteger(taskId)),
+            );
+
+            const mergedTasks = nextTaskOrder
+                .filter(taskId => !staleTaskIds.has(taskId))
+                .map(taskId => nextTaskById.get(taskId))
+                .filter((task): task is CalendarTask => Boolean(task));
+
+            tasksRef.current = mergedTasks;
+            setTasks(mergedTasks);
+            saveGoogleEventTaskMapToTempDb(nextMap);
+
+            setTaskTypes(prev => prev.includes(GOOGLE_SYNC_TYPE) ? prev : [...prev, GOOGLE_SYNC_TYPE]);
+            setTaskTypeColors(prev => ({
+                ...prev,
+                [GOOGLE_SYNC_TYPE]: prev[GOOGLE_SYNC_TYPE] ?? '#8ac7ff',
+            }));
+
+            enqueueSnackbar(`Google Calendar sync completed: ${googleEvents.length} events imported.`, {
+                variant: 'success',
+            });
+        } catch (error) {
+            console.error('Google Calendar sync failed:', error);
+            const message = getSyncErrorMessage(error);
+            if (message.toLowerCase().includes('canceled by user')) {
+                enqueueSnackbar('Google Calendar sync canceled.', { variant: 'info' });
+            } else {
+                enqueueSnackbar(`Google Calendar sync failed: ${message}`, { variant: 'error' });
+            }
+        } finally {
+            googleSyncRequestIdRef.current = null;
+            setGoogleSyncSession(null);
+            setGoogleCalendarOptions([]);
+            setSelectedGoogleCalendarIds([]);
+            setIsGoogleSyncing(false);
+        }
+    };
+
     const displayDate = dateTransition?.nextDate ?? currentDate;
     const effectiveViewMode: ViewMode = viewTransition?.toMode ?? viewMode;
     const displayTitle = effectiveViewMode === 'week'
@@ -1168,6 +1509,8 @@ function MainCalendar() {
                 onToday={handleToday}
                 onOpenCreateEvent={() => openCreateTaskModal(new Date())}
                 onOpenAiChat={openAiCreateModal}
+                onSyncGoogleCalendar={syncGoogleCalendar}
+                isGoogleSyncing={isGoogleSyncing || isGoogleCalendarPickerOpen}
                 onViewChange={handleViewChange}
                 onToggleFilters={() => setIsHeaderToolsOpen(prev => !prev)}
                 onFilterTypeChange={setFilterType}
@@ -1243,6 +1586,82 @@ function MainCalendar() {
                 setDraftName={setTypeDraftName}
                 setDraftColor={setTypeDraftColor}
             />
+
+            {isGoogleCalendarPickerOpen && (
+                <div
+                    className="task-modal-backdrop"
+                    onMouseDown={() => closeGoogleCalendarPicker()}
+                >
+                    <div
+                        className="task-modal google-calendar-picker-modal"
+                        onMouseDown={(event) => event.stopPropagation()}
+                    >
+                        <div className="task-modal-header">
+                            <h2>Select calendars to import</h2>
+                            <button
+                                type="button"
+                                className="task-modal-close"
+                                onClick={() => closeGoogleCalendarPicker()}
+                                aria-label="Close calendar picker"
+                            >
+                                x
+                            </button>
+                        </div>
+
+                        <p className="task-modal-meta">
+                            Selected {selectedGoogleCalendarIds.length} of {googleCalendarOptions.length} calendars.
+                        </p>
+
+                        <div className="google-calendar-picker-actions-row">
+                            <button
+                                type="button"
+                                className="task-modal-btn"
+                                onClick={() => setSelectedGoogleCalendarIds(googleCalendarOptions.map(calendar => calendar.id))}
+                            >
+                                Select all
+                            </button>
+                            <button
+                                type="button"
+                                className="task-modal-btn"
+                                onClick={() => setSelectedGoogleCalendarIds([])}
+                            >
+                                Clear all
+                            </button>
+                        </div>
+
+                        <div className="google-calendar-picker-list" role="group" aria-label="Google calendars">
+                            {googleCalendarOptions.map(calendar => (
+                                <label key={calendar.id} className="google-calendar-picker-item">
+                                    <input
+                                        type="checkbox"
+                                        checked={selectedGoogleCalendarIds.includes(calendar.id)}
+                                        onChange={() => toggleGoogleCalendarSelection(calendar.id)}
+                                    />
+                                    <span className="google-calendar-picker-name">{calendar.name}</span>
+                                </label>
+                            ))}
+                        </div>
+
+                        <div className="task-modal-actions">
+                            <button
+                                type="button"
+                                className="task-modal-btn"
+                                onClick={() => closeGoogleCalendarPicker()}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                className="task-modal-btn primary"
+                                onClick={confirmGoogleCalendarImport}
+                                disabled={selectedGoogleCalendarIds.length === 0}
+                            >
+                                Import selected calendars
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             <AiChatModal
                 isOpen={isAiModalOpen}

@@ -19,6 +19,8 @@ interface HeaderControlsProps {
     onToday: () => void;
     onOpenCreateEvent: () => void;
     onOpenAiChat: () => void;
+    onSyncGoogleCalendar: () => void;
+    isGoogleSyncing: boolean;
     onViewChange: (mode: ViewMode) => void;
     onToggleFilters: () => void;
     onFilterTypeChange: (value: string) => void;
@@ -44,6 +46,8 @@ export function HeaderControls({
     onToday,
     onOpenCreateEvent,
     onOpenAiChat,
+    onSyncGoogleCalendar,
+    isGoogleSyncing,
     onViewChange,
     onToggleFilters,
     onFilterTypeChange,
@@ -70,6 +74,9 @@ export function HeaderControls({
                     <span className="button-divider" aria-hidden="true" />
                     <button className="nav-btn nav-new-event-btn" onClick={onOpenCreateEvent}>new event</button>
                     <button className="nav-btn nav-ai-create-btn" onClick={onOpenAiChat}>ai chat</button>
+                    <button className="nav-btn" onClick={onSyncGoogleCalendar} disabled={isGoogleSyncing}>
+                        {isGoogleSyncing ? 'syncing...' : 'sync google'}
+                    </button>
                 </div>
 
                 <div className="calendar-title">{displayTitle}</div>
