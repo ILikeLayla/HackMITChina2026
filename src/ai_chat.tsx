@@ -190,7 +190,7 @@ export function AiChatSidebar({
                 {activeThreadProgress && (
                     <div className={`ai-chat-progress-panel ${activeThreadProgress.isActive ? 'active' : 'done'}`}>
                         <div className="ai-chat-progress-head">
-                            <span>{activeThreadProgress.mode === 'sos' ? 'SOS Planner Progress' : 'AI Progress'}</span>
+                            <span>AI Progress</span>
                             <span>{`${Math.max(0, Math.min(100, Math.round(activeThreadProgress.percent)))}%`}</span>
                         </div>
                         <div className="ai-chat-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(0, Math.min(100, Math.round(activeThreadProgress.percent)))}>

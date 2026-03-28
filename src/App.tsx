@@ -358,21 +358,30 @@ function MainCalendar() {
         pendingAiRequestSourceRef.current = null;
         setIsAiSubmitting(false);
 
-        if (pendingSource === 'sos' && pendingThreadId) {
+        if (pendingThreadId) {
             setAiThreadProgressById(prev => {
                 const existing = prev[pendingThreadId];
                 const basePercent = existing ? existing.percent : 0;
+                const isSos = pendingSource === 'sos';
                 const finalProgress: AiThreadProgress = {
                     percent: reason === 'completed' ? 100 : Math.min(100, Math.max(8, basePercent)),
-                    status: reason === 'completed'
-                        ? 'SOS plan ready. Continue chatting below to refine it.'
-                        : reason === 'canceled'
-                            ? 'SOS run canceled. You can restart from the SOS button anytime.'
-                            : reason === 'failed'
-                                ? 'SOS run failed. Please adjust the range or try again.'
-                                : 'SOS run interrupted.',
+                    status: isSos
+                        ? reason === 'completed'
+                            ? 'SOS plan ready. Continue chatting below to refine it.'
+                            : reason === 'canceled'
+                                ? 'SOS run canceled. You can restart from the SOS button anytime.'
+                                : reason === 'failed'
+                                    ? 'SOS run failed. Please adjust the range or try again.'
+                                    : 'SOS run interrupted.'
+                        : reason === 'completed'
+                            ? 'AI response ready. Continue chatting below to refine it.'
+                            : reason === 'canceled'
+                                ? 'AI request canceled.'
+                                : reason === 'failed'
+                                    ? 'AI request failed. Please try again.'
+                                    : 'AI request interrupted.',
                     isActive: false,
-                    mode: 'sos',
+                    mode: pendingSource ?? 'chat',
                 };
 
                 return {
@@ -800,21 +809,21 @@ function MainCalendar() {
         if (!isDataLoaded) {
             return;
         }
-        saveTasksToTempDb(tasks);
+        void saveTasksToTempDb(tasks);
     }, [tasks, isDataLoaded]);
 
     useEffect(() => {
         if (!isDataLoaded) {
             return;
         }
-        saveTaskTypesToTempDb(taskTypes);
+        void saveTaskTypesToTempDb(taskTypes);
     }, [taskTypes, isDataLoaded]);
 
     useEffect(() => {
         if (!isDataLoaded) {
             return;
         }
-        saveTaskTypeColorsToTempDb(taskTypeColors);
+        void saveTaskTypeColorsToTempDb(taskTypeColors);
     }, [taskTypeColors, isDataLoaded]);
 
     useEffect(() => {
@@ -1122,14 +1131,12 @@ function MainCalendar() {
         const timeoutMs = AI_REQUEST_TIMEOUT_MS;
         aiRequestDeadlineRef.current = Date.now() + timeoutMs;
 
-        if (source === 'sos') {
-            updateThreadProgress(threadId, {
-                percent: 0,
-                status: 'Waiting for AI progress updates...',
-                isActive: true,
-                mode: 'sos',
-            });
-        }
+        updateThreadProgress(threadId, {
+            percent: 0,
+            status: 'Waiting for AI progress updates...',
+            isActive: true,
+            mode: source,
+        });
 
         if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
             appendMessageToThread(threadId, 'system', 'Unable to send because AI service is disconnected.');
@@ -1141,6 +1148,7 @@ function MainCalendar() {
         ws.current?.send(`ai_message: ${JSON.stringify({
             message: userInput,
             thread_id: threadId,
+            source,
         })}`);
 
         aiResultPollTimerRef.current = window.setTimeout(() => {

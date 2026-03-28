@@ -7,9 +7,9 @@ export interface FileStorageError {
 }
 
 export class FileStorage {
-    static read<T>(key: string): T | null {
+    static async read<T>(key: string): Promise<T | null> {
         try {
-            const value = invoke<unknown>("file_storage_read", { key });
+            const value = await invoke<unknown>("file_storage_read", { key });
             if (value === null) {
                 return null;
             }
@@ -24,9 +24,9 @@ export class FileStorage {
         }
     }
 
-    static write<T>(key: string, value: T): void {
+    static async write<T>(key: string, value: T): Promise<void> {
         try {
-            invoke("file_storage_write", { key, value });
+            await invoke("file_storage_write", { key, value });
         } catch (error) {
             console.error(`[FileStorage] Failed to write key '${key}':`, error);
             throw {
@@ -37,9 +37,9 @@ export class FileStorage {
         }
     }
 
-    static delete(key: string): void {
+    static async delete(key: string): Promise<void> {
         try {
-            invoke("file_storage_delete", { key });
+            await invoke("file_storage_delete", { key });
         } catch (error) {
             console.error(`[FileStorage] Failed to delete key '${key}':`, error);
             throw {

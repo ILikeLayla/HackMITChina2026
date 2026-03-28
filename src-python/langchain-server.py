@@ -44,6 +44,7 @@ active_websocket = None
 allow_restart_on_disconnect = AUTO_RESTART_ON_DISCONNECT
 shutdown_event = asyncio.Event()
 current_ai_thread_id = contextvars.ContextVar("current_ai_thread_id", default="default_thread")
+current_ai_request_mode = contextvars.ContextVar("current_ai_request_mode", default="chat")
 
 from langchain_deepseek import ChatDeepSeek
 
@@ -436,12 +437,15 @@ async def update_ai_progress(percent: int, status: str, is_active: bool = True):
     clamped_percent = max(0, min(100, int(percent)))
     status_text = (status or "").strip() or "AI is working..."
     thread_id = current_ai_thread_id.get()
+    mode = current_ai_request_mode.get()
+    if mode not in {"chat", "sos"}:
+        mode = "chat"
     payload = {
         "thread_id": thread_id,
         "percent": clamped_percent,
         "status": status_text,
         "is_active": bool(is_active),
-        "mode": "sos",
+        "mode": mode,
     }
 
     await active_websocket.send(f"ai_progress_update: {json.dumps(payload)}")
@@ -478,17 +482,27 @@ task_creation_agent = create_agent(
     checkpointer=InMemorySaver(),
 )
 
-async def calendar_agent(user_message, current_thread_id):
+async def calendar_agent(user_message, current_thread_id, request_mode: str = "chat"):
     logger.info("calendar_agent called with user message: %s", user_message)
 
-    system_prompt = f"You are a helpful assistant that lives in a calendar application. You support two kinds of calendar items: task (with DDL) and event (with a start and end time). Use create_calendar_task for tasks and create_calendar_event for events. When creating items, create new item types with appropriate color when necessary. When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks). For SOS or longer workflows, call update_ai_progress at key milestones and keep the status concise."
+    system_prompt = (
+        "You are a helpful assistant that lives in a calendar application. "
+        "You support two kinds of calendar items: task (with DDL) and event (with a start and end time). "
+        "Use create_calendar_task for tasks and create_calendar_event for events. "
+        "When creating items, create new item types with appropriate color when necessary. "
+        "When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks). "
+        "Use update_ai_progress in all chats whenever the workflow has multiple steps, external tool calls, or may take noticeable time. "
+        "Send concise milestone updates (about 3-6 per request), including a start update and a final completion update."
+    )
 
     initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
     logger.info("Invoking calendar agent")
     token = current_ai_thread_id.set(current_thread_id)
+    mode_token = current_ai_request_mode.set(request_mode if request_mode in {"chat", "sos"} else "chat")
     try:
         response = await task_creation_agent.ainvoke({"messages": initial_messages}, {"configurable": {"thread_id": current_thread_id}})
     finally:
+        current_ai_request_mode.reset(mode_token)
         current_ai_thread_id.reset(token)
 
     response_content = response['messages'][-1].content if 'messages' in response and len(response['messages']) > 0 else str(response)
@@ -496,10 +510,10 @@ async def calendar_agent(user_message, current_thread_id):
     return response_content
 
 
-async def handle_ai_request(websocket, message, current_thread_id):
+async def handle_ai_request(websocket, message, current_thread_id, request_mode: str = "chat"):
     try:
         logger.info("Processing ai_message payload: %s", message)
-        result = await calendar_agent(message, current_thread_id)
+        result = await calendar_agent(message, current_thread_id, request_mode)
         logger.info("Sending task processing result back to client")
         await websocket.send(f"task_creation_result: {result}")
     except Exception as exc:
@@ -525,11 +539,14 @@ async def listen(websocket):
                     message_data = json.loads(message_json)
                     message = message_data.get("message", "")
                     thread_id = message_data.get("thread_id", "default_thread")
+                    request_mode = message_data.get("source", "chat")
+                    if request_mode not in {"chat", "sos"}:
+                        request_mode = "chat"
                     logger.info("Received AI message for thread %s: %s", thread_id, message)
                 except json.JSONDecodeError:
                     logger.error("Failed to decode AI message as JSON: %s", message_json)
                     continue
-                task = asyncio.create_task(handle_ai_request(websocket, message, thread_id))
+                task = asyncio.create_task(handle_ai_request(websocket, message, thread_id, request_mode))
                 background_tasks.add(task)
                 task.add_done_callback(background_tasks.discard)
             if message == "shutdown_server" or message.startswith("shutdown_server:"):

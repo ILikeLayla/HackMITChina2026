@@ -14,7 +14,7 @@ export const defaultTypeColors: Record<string, string> = {
     other: '#b8b8b8',
 };
 
-export function loadTaskTypeColorsFromTempDb(types: string[]): Record<string, string> {
+export async function loadTaskTypeColorsFromTempDb(types: string[]): Promise<Record<string, string>> {
     const fallback = { ...defaultTypeColors };
 
     for (const type of types) {
@@ -24,7 +24,7 @@ export function loadTaskTypeColorsFromTempDb(types: string[]): Record<string, st
     }
 
     try {
-        const raw = FileStorage.read<Record<string, string>>(TASK_TYPE_COLORS_DB_KEY);
+        const raw = await FileStorage.read<Record<string, string>>(TASK_TYPE_COLORS_DB_KEY);
         if (!raw) {
             return fallback;
         }
@@ -42,19 +42,19 @@ export function loadTaskTypeColorsFromTempDb(types: string[]): Record<string, st
     }
 }
 
-export function saveTaskTypeColorsToTempDb(typeColors: Record<string, string>): void {
+export async function saveTaskTypeColorsToTempDb(typeColors: Record<string, string>): Promise<void> {
     try {
-        FileStorage.write(TASK_TYPE_COLORS_DB_KEY, typeColors);
+        await FileStorage.write(TASK_TYPE_COLORS_DB_KEY, typeColors);
     } catch (error) {
         console.error('[db_utils] Failed to save task type colors:', error);
     }
 }
 
-export function loadTaskTypesFromTempDb(): string[] {
+export async function loadTaskTypesFromTempDb(): Promise<string[]> {
     const seedTypes = ['other'];
 
     try {
-        const raw = FileStorage.read<string[]>(TASK_TYPES_DB_KEY);
+        const raw = await FileStorage.read<string[]>(TASK_TYPES_DB_KEY);
         if (!raw || !Array.isArray(raw) || raw.length === 0) {
             return seedTypes;
         }
@@ -65,9 +65,9 @@ export function loadTaskTypesFromTempDb(): string[] {
     }
 }
 
-export function loadTasksFromTempDb(): CalendarTask[] {
+export async function loadTasksFromTempDb(): Promise<CalendarTask[]> {
     try {
-        const raw = FileStorage.read<Array<Partial<CalendarTask> & { time?: string }>>(TASKS_DB_KEY);
+        const raw = await FileStorage.read<Array<Partial<CalendarTask> & { time?: string }>>(TASKS_DB_KEY);
         if (!raw || !Array.isArray(raw)) {
             return seedTasks;
         }
@@ -122,25 +122,25 @@ export function loadTasksFromTempDb(): CalendarTask[] {
     }
 }
 
-export function saveTasksToTempDb(tasks: CalendarTask[]): void {
+export async function saveTasksToTempDb(tasks: CalendarTask[]): Promise<void> {
     try {
-        FileStorage.write(TASKS_DB_KEY, tasks);
+        await FileStorage.write(TASKS_DB_KEY, tasks);
     } catch (error) {
         console.error('[db_utils] Failed to save tasks:', error);
     }
 }
 
-export function saveTaskTypesToTempDb(types: string[]): void {
+export async function saveTaskTypesToTempDb(types: string[]): Promise<void> {
     try {
-        FileStorage.write(TASK_TYPES_DB_KEY, types);
+        await FileStorage.write(TASK_TYPES_DB_KEY, types);
     } catch (error) {
         console.error('[db_utils] Failed to save task types:', error);
     }
 }
 
-export function loadGoogleEventTaskMapFromTempDb(): Record<string, number> {
+export async function loadGoogleEventTaskMapFromTempDb(): Promise<Record<string, number>> {
     try {
-        const raw = FileStorage.read<Record<string, number>>(GOOGLE_EVENT_TASK_MAP_DB_KEY);
+        const raw = await FileStorage.read<Record<string, number>>(GOOGLE_EVENT_TASK_MAP_DB_KEY);
         if (!raw) {
             return {};
         }
@@ -158,9 +158,9 @@ export function loadGoogleEventTaskMapFromTempDb(): Record<string, number> {
     }
 }
 
-export function saveGoogleEventTaskMapToTempDb(eventTaskMap: Record<string, number>): void {
+export async function saveGoogleEventTaskMapToTempDb(eventTaskMap: Record<string, number>): Promise<void> {
     try {
-        FileStorage.write(GOOGLE_EVENT_TASK_MAP_DB_KEY, eventTaskMap);
+        await FileStorage.write(GOOGLE_EVENT_TASK_MAP_DB_KEY, eventTaskMap);
     } catch (error) {
         console.error('[db_utils] Failed to save Google event task map:', error);
     }

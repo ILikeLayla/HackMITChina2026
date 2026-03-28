@@ -353,7 +353,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     percent: clampedPercent,
                     status: statusText,
                     isActive,
-                    mode: payload.mode === 'chat' ? 'chat' : 'sos',
+                    mode: payload.mode === 'sos' ? 'sos' : 'chat',
                 });
 
                 if (isAiSubmittingRef.current && targetThreadId === pendingAiRequestThreadIdRef.current) {
