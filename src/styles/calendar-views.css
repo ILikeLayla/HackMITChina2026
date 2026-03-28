@@ -691,3 +691,126 @@
     animation: none;
   }
 }
+
+/* ── AI Preview Staged Changes ── */
+
+.ai-preview-new,
+.ai-preview-modified,
+.ai-preview-deleted {
+  position: relative;
+  border-style: dashed !important;
+  border-width: 2px !important;
+}
+
+.ai-preview-new {
+  border-color: #1a9d3a !important;
+  box-shadow: inset 0 0 0 200px rgba(34, 154, 56, 0.14);
+}
+
+.ai-preview-new::after {
+  content: '+ NEW';
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  color: #116329;
+  pointer-events: none;
+  line-height: 1;
+}
+
+.ai-preview-modified {
+  border-color: #2563eb !important;
+  box-shadow: inset 0 0 0 200px rgba(37, 99, 235, 0.13);
+}
+
+.ai-preview-modified::after {
+  content: '~ EDITED';
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  color: #1d4ed8;
+  pointer-events: none;
+  line-height: 1;
+}
+
+.ai-preview-deleted {
+  border-color: #dc2626 !important;
+  box-shadow: inset 0 0 0 200px rgba(220, 38, 38, 0.10);
+  opacity: 0.50;
+  cursor: default !important;
+  pointer-events: none;
+}
+
+.ai-preview-deleted .task-title-line,
+.ai-preview-deleted .task-main-title,
+.ai-preview-deleted .list-card-task-main {
+  text-decoration: line-through;
+  text-decoration-color: #b91c1c;
+  text-decoration-thickness: 1.5px;
+}
+
+.ai-preview-deleted::after {
+  content: '\2212 DEL';
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  color: #b91c1c;
+  pointer-events: none;
+  line-height: 1;
+}
+
+/* Day / List view preview badge positioning */
+
+.day-view-task.ai-preview-new::after,
+.day-view-task.ai-preview-modified::after,
+.day-view-task.ai-preview-deleted::after,
+.list-card-task.ai-preview-new::after,
+.list-card-task.ai-preview-modified::after,
+.list-card-task.ai-preview-deleted::after {
+  top: 7px;
+  right: 10px;
+  font-size: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ai-preview-new {
+    border-color: #3fb950 !important;
+    box-shadow: inset 0 0 0 200px rgba(63, 185, 80, 0.16);
+  }
+
+  .ai-preview-new::after {
+    color: #56d364;
+  }
+
+  .ai-preview-modified {
+    border-color: #58a6ff !important;
+    box-shadow: inset 0 0 0 200px rgba(88, 166, 255, 0.15);
+  }
+
+  .ai-preview-modified::after {
+    color: #79c0ff;
+  }
+
+  .ai-preview-deleted {
+    border-color: #f85149 !important;
+    box-shadow: inset 0 0 0 200px rgba(248, 81, 73, 0.14);
+  }
+
+  .ai-preview-deleted::after {
+    color: #ff7b72;
+  }
+
+  .ai-preview-deleted .task-title-line,
+  .ai-preview-deleted .task-main-title,
+  .ai-preview-deleted .list-card-task-main {
+    text-decoration-color: #ff7b72;
+  }
+}

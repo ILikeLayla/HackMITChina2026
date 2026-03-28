@@ -42,9 +42,9 @@ export function ListView({
                         return (
                             <div
                                 key={task.id}
-                                className={`list-card-task task clickable-task ${task.type} commitment-${category}`}
+                                className={`list-card-task task clickable-task ${task.type} commitment-${category}${task._aiPreviewStatus ? ` ${task._aiPreviewStatus}` : ''}`}
                                 style={getTaskStyle(task.type)}
-                                onClick={() => openTaskModal(task)}
+                                onClick={() => { if (task._aiPreviewStatus !== 'ai-preview-deleted') openTaskModal(task); }}
                             >
                                 <div className="list-card-task-main">
                                     <span className="task-main-left">

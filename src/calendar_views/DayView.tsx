@@ -39,9 +39,9 @@ export function DayView({
         return (
             <div
                 key={task.id}
-                className={`day-view-task task clickable-task ${task.type} commitment-${category}`}
+                className={`day-view-task task clickable-task ${task.type} commitment-${category}${task._aiPreviewStatus ? ` ${task._aiPreviewStatus}` : ''}`}
                 style={getTaskStyle(task.type)}
-                onClick={() => openTaskModal(task)}
+                onClick={() => { if (task._aiPreviewStatus !== 'ai-preview-deleted') openTaskModal(task); }}
             >
                 <div className="day-view-task-main">
                     <span className="task-main-left">

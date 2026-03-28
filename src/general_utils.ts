@@ -2,6 +2,8 @@ export type TaskType = string;
 export type CalendarItemKind = 'task' | 'event';
 export type TaskCommitmentCategory = 'hard_commitment' | 'flexible_work' | 'undetermined';
 
+export type AiPreviewStatus = 'ai-preview-new' | 'ai-preview-modified' | 'ai-preview-deleted';
+
 export interface CalendarTask {
     id: number;
     title: string;
@@ -13,6 +15,7 @@ export interface CalendarTask {
     startTime: string;
     endTime: string;
     note: string;
+    _aiPreviewStatus?: AiPreviewStatus;
 }
 
 export function normalizeTaskCommitmentCategory(value: unknown): TaskCommitmentCategory | null {

@@ -1014,7 +1014,53 @@ function MainCalendar() {
         );
     };
 
-    const filteredAndSortedTasks = filterAndSortTasks(tasks, filterType, filterKeyword, searchScope, filterCommitment, filterItemKind);
+    const displayTasks = (() => {
+        const snapshot = pendingAiCalendarSnapshotRef.current;
+        if (!snapshot || !hasPendingAiCalendarChanges) {
+            return tasks;
+        }
+
+        const snapshotById = new Map(snapshot.tasks.map(t => [t.id, t]));
+        const stagedById = new Map(tasksRef.current.map(t => [t.id, t]));
+
+        const result: CalendarTask[] = [];
+
+        for (const task of tasksRef.current) {
+            const original = snapshotById.get(task.id);
+            if (!original) {
+                result.push({ ...task, _aiPreviewStatus: 'ai-preview-new' });
+            } else {
+                const changed =
+                    original.title !== task.title ||
+                    original.date !== task.date ||
+                    original.type !== task.type ||
+                    original.itemKind !== task.itemKind ||
+                    original.ddl !== task.ddl ||
+                    original.startTime !== task.startTime ||
+                    original.endTime !== task.endTime ||
+                    original.note !== task.note;
+                if (changed) {
+                    result.push({ ...task, _aiPreviewStatus: 'ai-preview-modified' });
+                } else {
+                    result.push(task);
+                }
+            }
+        }
+
+        for (const task of snapshot.tasks) {
+            if (!stagedById.has(task.id)) {
+                result.push({ ...task, _aiPreviewStatus: 'ai-preview-deleted' });
+            }
+        }
+
+        return result;
+    })();
+
+    const displayTaskTypeColors = hasPendingAiCalendarChanges && pendingAiCalendarSnapshotRef.current
+        ? { ...taskTypeColors, ...taskTypeColorsRef.current }
+        : taskTypeColors;
+
+    const filteredAndSortedTasks = filterAndSortTasks(displayTasks, filterType, filterKeyword, searchScope, filterCommitment, filterItemKind);
 
     const getTasksForDay = (day: CalendarDay) => {
         return getTasksForDayFromTasks(filteredAndSortedTasks, day);
@@ -1654,7 +1700,7 @@ function MainCalendar() {
     };
 
     const getTaskStyle = (type: string) => {
-        const backgroundColor = taskTypeColors[type] ?? (type === OTHER_TYPE ? defaultTypeColors[OTHER_TYPE] : '#dfe7ff');
+        const backgroundColor = displayTaskTypeColors[type] ?? (type === OTHER_TYPE ? defaultTypeColors[OTHER_TYPE] : '#dfe7ff');
         return {
             background: backgroundColor,
             color: getReadableTextColor(backgroundColor),

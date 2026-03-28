@@ -50,12 +50,12 @@ export function WeekView({
                                             return (
                                             <div
                                                 key={task.id}
-                                                className={`task clickable-task ${task.type} commitment-${commitmentCategory}`}
+                                                className={`task clickable-task ${task.type} commitment-${commitmentCategory}${task._aiPreviewStatus ? ` ${task._aiPreviewStatus}` : ''}`}
                                                 style={getTaskStyle(task.type)}
                                                 title={`${task.title} ${getTaskDisplayTime(task)}`}
                                                 onClick={(event) => {
                                                     event.stopPropagation();
-                                                    openTaskModal(task);
+                                                    if (task._aiPreviewStatus !== 'ai-preview-deleted') openTaskModal(task);
                                                 }}
                                             >
                                                 <div className="task-meta-line">
