@@ -14,6 +14,8 @@ interface HeaderControlsProps {
     filterType: string;
     filterKeyword: string;
     searchScope: SearchScope;
+    filterCommitment: string;
+    filterItemKind: string;
     taskTypes: string[];
     onPrev: () => void;
     onNext: () => void;
@@ -29,6 +31,8 @@ interface HeaderControlsProps {
     onFilterTypeChange: (value: string) => void;
     onFilterKeywordChange: (value: string) => void;
     onSearchScopeChange: (scope: SearchScope) => void;
+    onFilterCommitmentChange: (value: string) => void;
+    onFilterItemKindChange: (value: string) => void;
 }
 
 export function HeaderControls({
@@ -44,6 +48,8 @@ export function HeaderControls({
     filterType,
     filterKeyword,
     searchScope,
+    filterCommitment,
+    filterItemKind,
     taskTypes,
     onPrev,
     onNext,
@@ -59,6 +65,8 @@ export function HeaderControls({
     onFilterTypeChange,
     onFilterKeywordChange,
     onSearchScopeChange,
+    onFilterCommitmentChange,
+    onFilterItemKindChange,
 }: HeaderControlsProps) {
     const [isJumpToDateOpen, setIsJumpToDateOpen] = useState(false);
     const [jumpSelectedDate, setJumpSelectedDate] = useState(() => new Date(currentDisplayDate));
@@ -260,6 +268,23 @@ export function HeaderControls({
                             {taskTypes.map(type => (
                                 <option key={type} value={type}>{type}</option>
                             ))}
+                        </select>
+                    </div>
+                    <div className="header-tools-group">
+                        <div className="header-tools-group-label"><label htmlFor="filterItemKind">KIND</label></div>
+                        <select id="filterItemKind" value={filterItemKind} onChange={(event) => onFilterItemKindChange(event.target.value)}>
+                            <option value="all">All</option>
+                            <option value="task">Task</option>
+                            <option value="event">Event</option>
+                        </select>
+                    </div>
+                    <div className="header-tools-group">
+                        <div className="header-tools-group-label"><label htmlFor="filterCommitment">COMMITMENT</label></div>
+                        <select id="filterCommitment" value={filterCommitment} onChange={(event) => onFilterCommitmentChange(event.target.value)}>
+                            <option value="all">All</option>
+                            <option value="hard_commitment">Hard commitment</option>
+                            <option value="flexible_work">Flexible work</option>
+                            <option value="undetermined">Undetermined</option>
                         </select>
                     </div>
                     <div className="header-tools-group">

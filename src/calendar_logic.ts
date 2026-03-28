@@ -49,12 +49,22 @@ export function filterAndSortTasks(
     filterType: string,
     filterKeyword: string,
     searchScope: SearchScope,
+    filterCommitment: string = 'all',
+    filterItemKind: string = 'all',
 ) {
     const normalizedKeyword = filterKeyword.trim().toLowerCase();
 
     return [...tasks]
         .filter(task => {
             if (filterType !== 'all' && task.type !== filterType) {
+                return false;
+            }
+
+            if (filterCommitment !== 'all' && (task.commitmentCategory ?? 'undetermined') !== filterCommitment) {
+                return false;
+            }
+
+            if (filterItemKind !== 'all' && task.itemKind !== filterItemKind) {
                 return false;
             }
 

@@ -153,6 +153,8 @@ function MainCalendar() {
     const [filterType, setFilterType] = useState<string>('all');
     const [filterKeyword, setFilterKeyword] = useState('');
     const [searchScope, setSearchScope] = useState<SearchScope>('all');
+    const [filterCommitment, setFilterCommitment] = useState<string>('all');
+    const [filterItemKind, setFilterItemKind] = useState<string>('all');
     const [isGoogleSyncing, setIsGoogleSyncing] = useState(false);
     const [isGoogleCalendarPickerOpen, setIsGoogleCalendarPickerOpen] = useState(false);
     const [googleCalendarOptions, setGoogleCalendarOptions] = useState<GoogleCalendarSelectionItem[]>([]);
@@ -964,7 +966,7 @@ function MainCalendar() {
             }, FILTER_REFRESH_ANIMATION_MS);
             filterRefreshRafRef.current = null;
         });
-    }, [filterType, filterKeyword, searchScope]);
+    }, [filterType, filterKeyword, searchScope, filterCommitment, filterItemKind]);
 
     const renderViewContent = (mode: ViewMode, displayDate: Date) => {
         if (mode === 'list') {
@@ -1012,7 +1014,7 @@ function MainCalendar() {
         );
     };
 
-    const filteredAndSortedTasks = filterAndSortTasks(tasks, filterType, filterKeyword, searchScope);
+    const filteredAndSortedTasks = filterAndSortTasks(tasks, filterType, filterKeyword, searchScope, filterCommitment, filterItemKind);
 
     const getTasksForDay = (day: CalendarDay) => {
         return getTasksForDayFromTasks(filteredAndSortedTasks, day);
@@ -1119,7 +1121,7 @@ function MainCalendar() {
         return () => {
             cleanups.forEach(cleanup => cleanup());
         };
-    }, [viewMode, dateTransition, viewTransition, tasks, filterType, filterKeyword, searchScope]);
+    }, [viewMode, dateTransition, viewTransition, tasks, filterType, filterKeyword, searchScope, filterCommitment, filterItemKind]);
 
     const captureCurrentSidebar = () => {
         if (isAiModalOpen) {
@@ -1958,6 +1960,8 @@ function MainCalendar() {
                 filterType={filterType}
                 filterKeyword={filterKeyword}
                 searchScope={searchScope}
+                filterCommitment={filterCommitment}
+                filterItemKind={filterItemKind}
                 taskTypes={taskTypes}
                 onPrev={handlePrevMonth}
                 onNext={handleNextMonth}
@@ -1973,6 +1977,8 @@ function MainCalendar() {
                 onFilterTypeChange={setFilterType}
                 onFilterKeywordChange={setFilterKeyword}
                 onSearchScopeChange={setSearchScope}
+                onFilterCommitmentChange={setFilterCommitment}
+                onFilterItemKindChange={setFilterItemKind}
             />
             
             {viewTransition ? (
