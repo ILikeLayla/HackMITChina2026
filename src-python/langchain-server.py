@@ -1,6 +1,7 @@
 from langchain.tools import tool
 from langchain.agents import create_agent
 from langchain.messages import SystemMessage, HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver  
 
 import getpass
 import os
@@ -15,9 +16,13 @@ import json
 import logging
 import os
 import sys
+import uuid
 
 HEALTH_CHECK_HOST = "127.0.0.1"
 HEALTH_CHECK_PORT = 8766
+
+# Toggle this in code to enable/disable process auto-restart after websocket disconnect.
+AUTO_RESTART_ON_DISCONNECT = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,8 +31,9 @@ logging.basicConfig(
 logger = logging.getLogger("langchain-server")
 
 task_creation_results = asyncio.Queue()
+calendar_query_results: dict[str, asyncio.Future] = {}
 active_websocket = None
-allow_restart_on_disconnect = True
+allow_restart_on_disconnect = AUTO_RESTART_ON_DISCONNECT
 shutdown_event = asyncio.Event()
 
 from langchain_deepseek import ChatDeepSeek
@@ -47,6 +53,30 @@ def restart_current_process(reason: str):
     python_executable = sys.executable
     argv = [python_executable, *sys.argv]
     os.execv(python_executable, argv)
+
+
+async def send_frontend_request(prefix: str, payload: dict, timeout_seconds: float = 15.0):
+    if active_websocket is None:
+        return {"ok": False, "message": "No active websocket client connection."}
+
+    request_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    result_future = loop.create_future()
+    calendar_query_results[request_id] = result_future
+
+    try:
+        request_payload = {
+            **payload,
+            "request_id": request_id,
+        }
+        await active_websocket.send(f"{prefix}: {json.dumps(request_payload)}")
+        result_payload = await asyncio.wait_for(result_future, timeout=timeout_seconds)
+        return result_payload
+    except asyncio.TimeoutError:
+        logger.warning("Timeout waiting for frontend response (%s)", prefix)
+        return {"ok": False, "message": "No response from calendar app."}
+    finally:
+        calendar_query_results.pop(request_id, None)
 
 @tool
 async def create_calendar_task(title: str, date: str, taskType: str, time: str, notes: str):
@@ -93,6 +123,128 @@ async def create_calendar_task(title: str, date: str, taskType: str, time: str, 
     except TimeoutError:
         logger.warning("Timeout waiting for task creation result")
         return "Failed to create task: No response from calendar system."
+
+@tool
+async def get_all_tasks():
+    """Returns lightweight task summaries (id, title, date, time, type) without notes."""
+    logger.info("get_all_tasks called")
+
+    result_payload = await send_frontend_request("get_all_tasks", {}, timeout_seconds=15)
+    if not result_payload.get("ok", True):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to get tasks: {message}"
+
+    tasks = result_payload.get("tasks", [])
+    logger.info("get_all_tasks received %s tasks", len(tasks))
+    return tasks
+
+
+@tool
+async def get_task_by_id(task_id: int):
+    """Returns a single task by its numeric id."""
+    logger.info("get_task_by_id called with task_id=%s", task_id)
+
+    result_payload = await send_frontend_request("get_task_by_id", {"task_id": task_id}, timeout_seconds=15)
+    if not result_payload.get("ok", True):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to get task: {message}"
+
+    task = result_payload.get("task")
+    if task is None:
+        logger.info("Task id=%s not found", task_id)
+        return f"Task with id {task_id} was not found."
+    return task
+
+
+@tool
+async def update_calendar_task(
+    task_id: int,
+    title: str = "",
+    date: str = "",
+    taskType: str = "",
+    time: str = "",
+    notes: str = "",
+):
+    """Updates one calendar task by id. Empty string fields are ignored."""
+    logger.info("update_calendar_task called with task_id=%s", task_id)
+
+    updates = {}
+    if title:
+        updates["title"] = title
+    if date:
+        updates["date"] = date
+    if taskType:
+        updates["type"] = taskType
+    if time:
+        updates["time"] = time
+    if notes:
+        updates["note"] = notes
+
+    if not updates:
+        return "No updates were provided."
+
+    result_payload = await send_frontend_request(
+        "update_task",
+        {
+            "task_id": task_id,
+            "updates": updates,
+        },
+        timeout_seconds=15,
+    )
+
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to update task: {message}"
+
+    updated_task = result_payload.get("task")
+    return f"Task updated successfully: {updated_task}"
+
+
+@tool
+async def delete_calendar_task(task_id: int):
+    """Deletes one calendar task by id."""
+    logger.info("delete_calendar_task called with task_id=%s", task_id)
+
+    result_payload = await send_frontend_request("delete_task", {"task_id": task_id}, timeout_seconds=15)
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to delete task: {message}"
+
+    deleted_task = result_payload.get("task")
+    return f"Task deleted successfully: {deleted_task}"
+
+
+@tool
+async def update_task_type_color(taskType: str, color: str):
+    """Updates a task type color (hex color like #4f7ef7)."""
+    logger.info("update_task_type_color called with taskType=%s color=%s", taskType, color)
+
+    result_payload = await send_frontend_request(
+        "update_task_type_color",
+        {
+            "task_type": taskType,
+            "color": color,
+        },
+        timeout_seconds=15,
+    )
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to update type color: {message}"
+
+    return f"Type color updated successfully: {result_payload.get('task_type')} -> {result_payload.get('color')}"
+
+
+@tool
+async def get_all_task_type_colors():
+    """Returns all task type colors as a mapping of type name to hex color."""
+    logger.info("get_all_task_type_colors called")
+
+    result_payload = await send_frontend_request("get_task_type_colors", {}, timeout_seconds=15)
+    if not result_payload.get("ok", True):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to get task type colors: {message}"
+
+    return result_payload.get("colors", {})
     
 @tool
 def get_time_now():
@@ -104,34 +256,60 @@ def get_time_now():
     return current_time
 
 
-task_creation_agent = create_agent(model, tools=[create_calendar_task, get_time_now])
+task_creation_agent = create_agent(
+    model,
+    tools=[
+        create_calendar_task,
+        get_all_tasks,
+        get_task_by_id,
+        update_calendar_task,
+        delete_calendar_task,
+        update_task_type_color,
+        get_all_task_type_colors,
+        get_time_now,
+    ],
+    checkpointer=InMemorySaver(),
+)
 
-async def create_tasks_with_agent(task_description):
-    logger.info("create_tasks_with_agent called with description: %s", task_description)
+# async def create_tasks_with_agent(task_description):
+#     logger.info("create_tasks_with_agent called with description: %s", task_description)
 
-    system_prompt = f"You are a helpful assistant that creates calendar tasks based on user descriptions. The user will provide a description of the tasks they want to create, and you will plan and create the tasks accordingly. Here is the task description: {task_description}"
+#     system_prompt = f"You are a helpful assistant that creates calendar tasks based on user descriptions. The user will provide a description of the tasks they want to create, and you will plan and create the tasks accordingly. Here is the task description: {task_description}"
 
-    procedural_prompt = f"Based on the task description, first generate a plan of several calendar tasks that need to be created. Describe each task in detail, including the title, date, type (e.g., work, personal), time (note that the time should be in HH:MM format, no duration format), and medium detailed notes to describe the task. Use the get_time_now tool if you need to reference the current time for any of the tasks."
+#     procedural_prompt = f"Based on the task description, first generate a plan of several calendar tasks that need to be created. Describe each task in detail, including the title, date, type (e.g., work, personal), time (note that the time should be in HH:MM format, no duration format), and medium detailed notes to describe the task. Use the get_time_now tool if you need to reference the current time for any of the tasks."
 
-    initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=procedural_prompt)]
-    logger.info("Invoking task creation agent")
-    response = await task_creation_agent.ainvoke(input={"messages": initial_messages})
+#     initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=procedural_prompt)]
+#     logger.info("Invoking task creation agent")
+#     response = await task_creation_agent.ainvoke(input={"messages": initial_messages})
     
-    logger.info("Raw procedural response: %s", response)
+#     logger.info("Raw procedural response: %s", response)
     
-    follow_up_prompt = "Now that you have generated the plan, use the create_calendar_task tool to create each of the tasks you outlined. Provide a confirmation message for each task creation result."
-    logger.info("Invoking task creation agent for task execution")
-    further_response = await task_creation_agent.ainvoke(input={"messages": response['messages'] + [HumanMessage(content=follow_up_prompt)]})
+#     follow_up_prompt = "Now that you have generated the plan, use the create_calendar_task tool to create each of the tasks you outlined. Provide a confirmation message for each task creation result."
+#     logger.info("Invoking task creation agent for task execution")
+#     further_response = await task_creation_agent.ainvoke(input={"messages": response['messages'] + [HumanMessage(content=follow_up_prompt)]})
 
-    response_content = further_response['messages'][-1].content if 'messages' in further_response and len(further_response['messages']) > 0 else str(further_response)
-    logger.info("Extracted response content: %s", response_content)
+#     response_content = further_response['messages'][-1].content if 'messages' in further_response and len(further_response['messages']) > 0 else str(further_response)
+#     logger.info("Extracted response content: %s", response_content)
+#     return response_content
+
+async def calendar_agent(user_message, current_thread_id):
+    logger.info("calendar_agent called with user message: %s", user_message)
+
+    system_prompt = f"You are a helpful assistant that lives in a calendar application. You will answer user questions related to their calendar and create calendar tasks based on user requests. Here is the user message: {user_message}"
+
+    initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+    logger.info("Invoking calendar agent")
+    response = await task_creation_agent.ainvoke({"messages": initial_messages}, {"configurable": {"thread_id": current_thread_id}})
+
+    response_content = response['messages'][-1].content if 'messages' in response and len(response['messages']) > 0 else str(response)
+    logger.info("Extracted calendar agent response content: %s", response_content)
     return response_content
 
 
-async def handle_ai_request(websocket, task_info):
+async def handle_ai_request(websocket, message, current_thread_id):
     try:
-        logger.info("Processing ai_task_description payload: %s", task_info)
-        result = await create_tasks_with_agent(task_info)
+        logger.info("Processing ai_message payload: %s", message)
+        result = await calendar_agent(message, current_thread_id)
         logger.info("Sending task processing result back to client")
         await websocket.send(f"task_creation_result: {result}")
     except Exception as exc:
@@ -150,30 +328,18 @@ async def listen(websocket):
     try:
         async for message in websocket:
             logger.info("Incoming websocket message")
-            if message == "ping":
-                await websocket.send("pong")
-                continue
-            if message.startswith("ping: "):
-                ping_payload = message[len("ping: "):]
-                await websocket.send(f"pong: {ping_payload}")
-                continue
-            if message.startswith("ping_json: "):
-                raw_payload = message[len("ping_json: "):]
+            if message.startswith("ai_message: "):
+                message_json = message[len("ai_message: "):]
+                # parse the message to extract the task description and thread ID
                 try:
-                    payload = json.loads(raw_payload)
+                    message_data = json.loads(message_json)
+                    message = message_data.get("message", "")
+                    thread_id = message_data.get("thread_id", "default_thread")
+                    logger.info("Received AI message for thread %s: %s", thread_id, message)
                 except json.JSONDecodeError:
-                    await websocket.send("pong_json: {\"ok\": false, \"error\": \"invalid_json\"}")
+                    logger.error("Failed to decode AI message as JSON: %s", message_json)
                     continue
-
-                response_payload = {
-                    "ok": True,
-                    "echo": payload,
-                }
-                await websocket.send(f"pong_json: {json.dumps(response_payload, ensure_ascii=False)}")
-                continue
-            if message.startswith("ai_task_description: "):
-                task_info = message[len("ai_task_description: "):]
-                task = asyncio.create_task(handle_ai_request(websocket, task_info))
+                task = asyncio.create_task(handle_ai_request(websocket, message, thread_id))
                 background_tasks.add(task)
                 task.add_done_callback(background_tasks.discard)
             if message == "shutdown_server" or message.startswith("shutdown_server:"):
@@ -191,6 +357,84 @@ async def listen(websocket):
                 logger.info("Received task creation callback")
                 task_creation_results.put_nowait(result_info)
                 logger.info("Task creation result put into queue: %s", task_creation_results.qsize())
+            if message.startswith("all_tasks_result: "):
+                result_json = message[len("all_tasks_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("all_tasks_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode all_tasks_result JSON: %s", result_json)
+            if message.startswith("task_by_id_result: "):
+                result_json = message[len("task_by_id_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("task_by_id_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode task_by_id_result JSON: %s", result_json)
+            if message.startswith("update_task_result: "):
+                result_json = message[len("update_task_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("update_task_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode update_task_result JSON: %s", result_json)
+            if message.startswith("delete_task_result: "):
+                result_json = message[len("delete_task_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("delete_task_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode delete_task_result JSON: %s", result_json)
+            if message.startswith("update_task_type_color_result: "):
+                result_json = message[len("update_task_type_color_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("update_task_type_color_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode update_task_type_color_result JSON: %s", result_json)
+            if message.startswith("task_type_colors_result: "):
+                result_json = message[len("task_type_colors_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("task_type_colors_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode task_type_colors_result JSON: %s", result_json)
     finally:
         for task in background_tasks:
             task.cancel()
@@ -230,6 +474,10 @@ async def handle_health_check(reader: asyncio.StreamReader, writer: asyncio.Stre
 async def main():
     logger.info("Starting websocket server on 0.0.0.0:8765")
     logger.info("Starting health check server on %s:%s", HEALTH_CHECK_HOST, HEALTH_CHECK_PORT)
+    logger.info(
+        "Auto restart on disconnect is %s (AUTO_RESTART_ON_DISCONNECT in file)",
+        "enabled" if AUTO_RESTART_ON_DISCONNECT else "disabled",
+    )
     health_server = await asyncio.start_server(handle_health_check, HEALTH_CHECK_HOST, HEALTH_CHECK_PORT)
     async with health_server, websockets.serve(listen, "0.0.0.0", 8765):
         logger.info("Websocket server and health check server started; entering event loop")

@@ -59,7 +59,51 @@ const MODAL_CLOSE_ANIMATION_MS = 180;
 const FILTER_REFRESH_ANIMATION_MS = 180;
 const AI_REQUEST_TIMEOUT_MS = 180000;
 
+type AiChatRole = 'user' | 'assistant' | 'system';
+
+type AiTaskPreview = {
+    id: number;
+    title: string;
+    date: string;
+    time: string;
+    type: string;
+    note: string;
+};
+
+type AiChatMessage = {
+    id: string;
+    role: AiChatRole;
+    text: string;
+    createdAt: number;
+    taskPreview?: AiTaskPreview;
+};
+
+type AiChatThread = {
+    id: string;
+    title: string;
+    messages: AiChatMessage[];
+    createdAt: number;
+    updatedAt: number;
+};
+
 function MainCalendar() {
+    const createAiMessageId = () => `ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const createAiThreadId = () => `thread_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const createDefaultAiThread = (): AiChatThread => ({
+        id: 'default_thread',
+        title: 'Default thread',
+        messages: [
+            {
+                id: createAiMessageId(),
+                role: 'assistant',
+                text: 'Hello! I can help you manage your calendar. Ask me to create, adjust, or summarize your schedule.',
+                createdAt: Date.now(),
+            },
+        ],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+    });
+
     const [currentDate, setCurrentDate] = useState(new Date());
     const [viewMode, setViewMode] = useState<ViewMode>('month');
     const [dateTransition, setDateTransition] = useState<DateTransitionState | null>(null);
@@ -76,8 +120,9 @@ function MainCalendar() {
     const [isAiModalOpen, setIsAiModalOpen] = useState(false);
     const [isAiModalClosing, setIsAiModalClosing] = useState(false);
     const [isAiSubmitting, setIsAiSubmitting] = useState(false);
-    const [aiTaskDescription, setAiTaskDescription] = useState('');
-    const [aiReplyText, setAiReplyText] = useState('');
+    const [aiChatInput, setAiChatInput] = useState('');
+    const [aiThreads, setAiThreads] = useState<AiChatThread[]>(() => [createDefaultAiThread()]);
+    const [activeAiThreadId, setActiveAiThreadId] = useState('default_thread');
     const [typeModalMode, setTypeModalMode] = useState<'create' | 'edit'>('create');
     const [typeEditingOriginalName, setTypeEditingOriginalName] = useState<string | null>(null);
     const [typeDraftName, setTypeDraftName] = useState('');
@@ -105,24 +150,35 @@ function MainCalendar() {
 
     const ws = useRef<WebSocket | null>(null);
     const createdTaskAckResult = useRef<string | null>(null);
-    const aiTaskCreationResult = useRef<string | null>(null);
     const hasEverConnectedWsRef = useRef(false);
     const isUnmountingRef = useRef(false);
     const taskTypesRef = useRef(taskTypes);
+    const tasksRef = useRef(tasks);
+    const taskTypeColorsRef = useRef(taskTypeColors);
     const nextTaskIdRef = useRef(nextTaskId);
     const wsDisconnectedSnackbarIdRef = useRef<string | number | null>(null);
     const wsReconnectingSnackbarIdRef = useRef<string | number | null>(null);
-    const aiProcessingSnackbarIdRef = useRef<string | number | null>(null);
     const aiResultPollTimerRef = useRef<number | null>(null);
     const aiRequestDeadlineRef = useRef<number | null>(null);
+    const activeAiThreadIdRef = useRef(activeAiThreadId);
+    const pendingAiRequestThreadIdRef = useRef<string | null>(null);
     const isManualWsCloseRef = useRef(false);
     const isAiSubmittingRef = useRef(false);
     const isWindowCloseCleanupRunningRef = useRef(false);
     const hasWindowDestroyBeenRequestedRef = useRef(false);
+    const aiMessagesEndRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
         taskTypesRef.current = taskTypes;
     }, [taskTypes]);
+
+    useEffect(() => {
+        tasksRef.current = tasks;
+    }, [tasks]);
+
+    useEffect(() => {
+        taskTypeColorsRef.current = taskTypeColors;
+    }, [taskTypeColors]);
 
     useEffect(() => {
         nextTaskIdRef.current = nextTaskId;
@@ -132,6 +188,10 @@ function MainCalendar() {
         isAiSubmittingRef.current = isAiSubmitting;
     }, [isAiSubmitting]);
 
+    useEffect(() => {
+        activeAiThreadIdRef.current = activeAiThreadId;
+    }, [activeAiThreadId]);
+
     const clearAiResultPollTimer = () => {
         if (aiResultPollTimerRef.current !== null) {
             window.clearTimeout(aiResultPollTimerRef.current);
@@ -139,17 +199,10 @@ function MainCalendar() {
         }
     };
 
-    const clearAiProcessingSnackbar = () => {
-        if (aiProcessingSnackbarIdRef.current !== null) {
-            closeSnackbar(aiProcessingSnackbarIdRef.current);
-            aiProcessingSnackbarIdRef.current = null;
-        }
-    };
-
     const stopAiSubmitting = (options?: { closeConnection?: boolean }) => {
         clearAiResultPollTimer();
-        clearAiProcessingSnackbar();
         aiRequestDeadlineRef.current = null;
+        pendingAiRequestThreadIdRef.current = null;
         setIsAiSubmitting(false);
 
         if (options?.closeConnection) {
@@ -162,45 +215,86 @@ function MainCalendar() {
         }
     };
 
-    const AiProcessingSnackbarContent = ({
-        timeoutMs,
-        deadlineRef,
-        onCancel,
-    }: {
-        timeoutMs: number;
-        deadlineRef: React.MutableRefObject<number | null>;
-        onCancel: () => void;
-    }) => {
-        const getRemainingSeconds = () => {
-            const deadline = deadlineRef.current;
-            if (deadline === null) {
-                return 0;
-            }
-            return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
-        };
-        const [remainingSeconds, setRemainingSeconds] = useState(getRemainingSeconds);
+    const cancelActiveAiRequest = (reasonMessage: string) => {
+        if (!isAiSubmittingRef.current) {
+            return;
+        }
 
-        useEffect(() => {
-            const timerId = window.setInterval(() => {
-                setRemainingSeconds(getRemainingSeconds());
-            }, 250);
+        const pendingThreadId = pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current;
+        appendMessageToThread(pendingThreadId, 'system', reasonMessage);
+        stopAiSubmitting({ closeConnection: true });
+    };
 
-            return () => {
-                window.clearInterval(timerId);
-            };
-        }, [timeoutMs, deadlineRef]);
+    const appendMessageToThread = (
+        threadId: string,
+        role: AiChatRole,
+        text: string,
+        options?: { taskPreview?: AiTaskPreview },
+    ) => {
+        const createdAt = Date.now();
+        setAiThreads(prev => prev.map(thread => (
+            thread.id === threadId
+                ? {
+                    ...thread,
+                    messages: [
+                        ...thread.messages,
+                        {
+                            id: createAiMessageId(),
+                            role,
+                            text,
+                            createdAt,
+                            ...(options?.taskPreview ? { taskPreview: options.taskPreview } : {}),
+                        },
+                    ],
+                    updatedAt: createdAt,
+                }
+                : thread
+        )));
+    };
 
-        return (
-            <div className="snackbar-action-group">
-                <span className="snackbar-action-text">AI is processing your request... ({remainingSeconds}s)</span>
-                <button
-                    className="task-modal-btn snackbar-action-btn snackbar-action-btn-dismiss"
-                    onClick={onCancel}
-                >
-                    Cancel
-                </button>
-            </div>
+    const appendTaskEventMessageToActiveThread = (
+        message: string,
+        task?: CalendarTask,
+    ) => {
+        const targetThreadId = pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current;
+        appendMessageToThread(
+            targetThreadId,
+            'system',
+            message,
+            task
+                ? {
+                    taskPreview: {
+                        id: task.id,
+                        title: task.title,
+                        date: task.date,
+                        time: task.time,
+                        type: task.type,
+                        note: task.note,
+                    },
+                }
+                : undefined,
         );
+    };
+
+    const updateThreadTitleFromFirstUserMessage = (threadId: string, messageText: string) => {
+        const normalized = messageText.trim();
+        if (!normalized) {
+            return;
+        }
+
+        const nextTitle = normalized.length > 28 ? `${normalized.slice(0, 28)}...` : normalized;
+        setAiThreads(prev => prev.map(thread => {
+            if (thread.id !== threadId) {
+                return thread;
+            }
+            if (thread.title !== 'Default thread' && thread.title !== 'New thread') {
+                return thread;
+            }
+            return {
+                ...thread,
+                title: nextTitle,
+            };
+        }));
     };
 
     const clearWsDisconnectedSnackbar = () => {
@@ -431,7 +525,7 @@ function MainCalendar() {
                     setTimeout(waitForAcknowledgement, 2000);
                 };
                 waitForAcknowledgement();
-                enqueueSnackbar('AI created a new task: ' + title, { variant: 'success' });
+                appendTaskEventMessageToActiveThread(`AI created a new task: ${title || '(untitled task)'}`, newTask);
             } 
 
             if (typeof event.data === 'string' && event.data.startsWith('ack_created_task: ')) {
@@ -442,13 +536,225 @@ function MainCalendar() {
             if (typeof event.data === 'string' && event.data.startsWith('task_creation_result: ')) {
                 console.log('Handling task_creation_result message');
                 const resultText = event.data.substring('task_creation_result: '.length);
-                aiTaskCreationResult.current = resultText;
-
-                // Final AI result should update UI immediately to avoid polling race conditions.
-                setAiReplyText(resultText || 'AI finished, but returned an empty result.');
+                const targetThreadId = pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current;
+                appendMessageToThread(targetThreadId, 'assistant', resultText || 'AI finished, but returned an empty result.');
                 if (isAiSubmittingRef.current) {
                     stopAiSubmitting();
-                    enqueueSnackbar('AI has created tasks based on your description.', { variant: 'info' });
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('get_all_tasks: ')) {
+                const payloadText = event.data.substring('get_all_tasks: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as { request_id?: string };
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    const lightweightTasks = tasksRef.current.map(task => ({
+                        id: task.id,
+                        title: task.title,
+                        date: task.date,
+                        time: task.time,
+                        type: task.type,
+                    }));
+
+                    ws.current?.send(`all_tasks_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        tasks: lightweightTasks,
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse get_all_tasks payload:', error);
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('get_task_by_id: ')) {
+                const payloadText = event.data.substring('get_task_by_id: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as { request_id?: string; task_id?: number | string };
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    const taskId = Number(payload.task_id);
+                    const matchedTask = Number.isFinite(taskId)
+                        ? tasksRef.current.find(task => task.id === taskId) ?? null
+                        : null;
+
+                    ws.current?.send(`task_by_id_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        task: matchedTask,
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse get_task_by_id payload:', error);
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('update_task: ')) {
+                const payloadText = event.data.substring('update_task: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as {
+                        request_id?: string;
+                        task_id?: number | string;
+                        updates?: Partial<CalendarTask>;
+                    };
+
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    const taskId = Number(payload.task_id);
+                    if (!Number.isFinite(taskId) || !payload.updates || typeof payload.updates !== 'object') {
+                        ws.current?.send(`update_task_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: 'Invalid task update payload.',
+                        })}`);
+                        return;
+                    }
+
+                    const existingTask = tasksRef.current.find(task => task.id === taskId) ?? null;
+                    if (!existingTask) {
+                        ws.current?.send(`update_task_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: `Task with id ${taskId} not found.`,
+                        })}`);
+                        return;
+                    }
+
+                    const updatedTask: CalendarTask = {
+                        ...existingTask,
+                        ...(payload.updates?.title !== undefined ? { title: String(payload.updates.title) } : {}),
+                        ...(payload.updates?.date !== undefined ? { date: String(payload.updates.date) } : {}),
+                        ...(payload.updates?.type !== undefined ? { type: String(payload.updates.type) } : {}),
+                        ...(payload.updates?.time !== undefined ? { time: String(payload.updates.time) } : {}),
+                        ...(payload.updates?.note !== undefined ? { note: String(payload.updates.note) } : {}),
+                    };
+
+                    setTasks(prev => prev.map(task => task.id === taskId ? updatedTask : task));
+
+                    if (!taskTypesRef.current.includes(updatedTask.type)) {
+                        setTaskTypes(prev => [...prev, updatedTask.type]);
+                        setTaskTypeColors(prev => ({
+                            ...prev,
+                            [updatedTask.type]: prev[updatedTask.type] ?? defaultTypeColors[OTHER_TYPE],
+                        }));
+                    }
+
+                    appendTaskEventMessageToActiveThread(
+                        `AI updated task #${updatedTask.id}: ${updatedTask.title}`,
+                        updatedTask,
+                    );
+
+                    ws.current?.send(`update_task_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        task: updatedTask,
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse update_task payload:', error);
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('delete_task: ')) {
+                const payloadText = event.data.substring('delete_task: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as { request_id?: string; task_id?: number | string };
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    const taskId = Number(payload.task_id);
+                    if (!Number.isFinite(taskId)) {
+                        ws.current?.send(`delete_task_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: 'Invalid task id.',
+                        })}`);
+                        return;
+                    }
+
+                    const existingTask = tasksRef.current.find(task => task.id === taskId) ?? null;
+                    if (!existingTask) {
+                        ws.current?.send(`delete_task_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: `Task with id ${taskId} not found.`,
+                        })}`);
+                        return;
+                    }
+
+                    setTasks(prev => prev.filter(task => task.id !== taskId));
+                    appendTaskEventMessageToActiveThread(
+                        `AI deleted task #${existingTask.id}: ${existingTask.title}`,
+                    );
+                    ws.current?.send(`delete_task_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        task: existingTask,
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse delete_task payload:', error);
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('update_task_type_color: ')) {
+                const payloadText = event.data.substring('update_task_type_color: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as { request_id?: string; task_type?: string; color?: string };
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    const taskType = (payload.task_type ?? '').trim().toLowerCase();
+                    const color = (payload.color ?? '').trim();
+                    if (!taskType || !isValidHexColor(color)) {
+                        ws.current?.send(`update_task_type_color_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: 'Invalid task_type or color.',
+                        })}`);
+                        return;
+                    }
+
+                    if (!taskTypesRef.current.includes(taskType)) {
+                        setTaskTypes(prev => [...prev, taskType]);
+                    }
+
+                    setTaskTypeColors(prev => ({
+                        ...prev,
+                        [taskType]: color,
+                    }));
+
+                    ws.current?.send(`update_task_type_color_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        task_type: taskType,
+                        color,
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse update_task_type_color payload:', error);
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('get_task_type_colors: ')) {
+                const payloadText = event.data.substring('get_task_type_colors: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as { request_id?: string };
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    ws.current?.send(`task_type_colors_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        colors: taskTypeColorsRef.current,
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse get_task_type_colors payload:', error);
                 }
             }
         };
@@ -481,6 +787,10 @@ function MainCalendar() {
             }
 
             if (isAiSubmittingRef.current) {
+                const pendingThreadId = pendingAiRequestThreadIdRef.current;
+                if (pendingThreadId) {
+                    appendMessageToThread(pendingThreadId, 'system', 'Connection was lost while waiting for AI response.');
+                }
                 stopAiSubmitting();
                 enqueueSnackbar('Connection lost while waiting for AI response.', { variant: 'warning' });
             }
@@ -493,6 +803,10 @@ function MainCalendar() {
         const handleError = () => {
             clearWsReconnectingSnackbar();
             if (isAiSubmittingRef.current) {
+                const pendingThreadId = pendingAiRequestThreadIdRef.current;
+                if (pendingThreadId) {
+                    appendMessageToThread(pendingThreadId, 'system', 'Connection error occurred while waiting for AI response.');
+                }
                 stopAiSubmitting();
                 enqueueSnackbar('Connection error while waiting for AI response.', { variant: 'warning' });
             }
@@ -1001,8 +1315,7 @@ function MainCalendar() {
         setIsAiModalClosing(false);
         setIsAiModalOpen(true);
         setIsAiSubmitting(false);
-        setAiTaskDescription('');
-        setAiReplyText('');
+        setAiChatInput('');
     };
 
     const closeAiCreateModal = () => {
@@ -1016,8 +1329,7 @@ function MainCalendar() {
                 return;
             }
 
-            stopAiSubmitting({ closeConnection: true });
-            enqueueSnackbar('AI request canceled because the create window was closed.', { variant: 'default' });
+            cancelActiveAiRequest('AI request canceled because the chat window was closed.');
         }
 
         setIsAiModalClosing(true);
@@ -1029,75 +1341,77 @@ function MainCalendar() {
         }, MODAL_CLOSE_ANIMATION_MS);
     };
 
-    const handleAiTaskDescriptionChange = (value: string) => {
-        setAiTaskDescription(value);
+    const createNewAiThread = () => {
+        const now = Date.now();
+        const threadId = createAiThreadId();
+        const newThread: AiChatThread = {
+            id: threadId,
+            title: 'New thread',
+            messages: [
+                {
+                    id: createAiMessageId(),
+                    role: 'assistant',
+                    text: 'New thread started. Tell me what you want to schedule.',
+                    createdAt: now,
+                },
+            ],
+            createdAt: now,
+            updatedAt: now,
+        };
+        setAiThreads(prev => [newThread, ...prev]);
+        setActiveAiThreadId(threadId);
+        setAiChatInput('');
     };
 
-    const handleCreateWithAi = () => {
+    const handleAiChatInputChange = (value: string) => {
+        setAiChatInput(value);
+    };
+
+    const handleSendAiChatMessage = () => {
         if (isAiSubmitting) {
             return;
         }
 
-        if (!aiTaskDescription.trim()) {
-            enqueueSnackbar('Please enter a task description first.', { variant: 'warning' });
+        const userInput = aiChatInput.trim();
+        if (!userInput) {
+            enqueueSnackbar('Please enter a message first.', { variant: 'warning' });
             return;
         }
 
+        const targetThreadId = activeAiThreadIdRef.current;
+        appendMessageToThread(targetThreadId, 'user', userInput);
+        updateThreadTitleFromFirstUserMessage(targetThreadId, userInput);
+        setAiChatInput('');
+
         setIsAiSubmitting(true);
-        console.log('AI Task Description:', aiTaskDescription);
+        pendingAiRequestThreadIdRef.current = targetThreadId;
+        console.log('AI chat message:', userInput);
 
         const timeoutMs = AI_REQUEST_TIMEOUT_MS;
         aiRequestDeadlineRef.current = Date.now() + timeoutMs;
 
-        const cancelAiRequest = () => {
-            if (!isAiSubmittingRef.current) {
-                return;
-            }
-
-            stopAiSubmitting({ closeConnection: true });
-            enqueueSnackbar('AI request canceled.', { variant: 'default' });
-        };
-
-        const snackbarId = enqueueSnackbar(
-            <AiProcessingSnackbarContent
-                timeoutMs={timeoutMs}
-                deadlineRef={aiRequestDeadlineRef}
-                onCancel={cancelAiRequest}
-            />,
-            {
-                variant: 'info',
-                persist: true,
-            },
-        );
-        aiProcessingSnackbarIdRef.current = snackbarId;
-
         if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+            appendMessageToThread(targetThreadId, 'system', 'Unable to send because AI service is disconnected.');
             stopAiSubmitting();
             enqueueWsDisconnectedSnackbar();
             return;
         }
 
-        aiTaskCreationResult.current = null;
-        ws.current?.send(`ai_task_description: ${aiTaskDescription}`);
-        // wait for the taskCreationResult to be set by the WebSocket message handler, then update the aiReplyText with the result
-        const checkForAiResult = () => {
+        ws.current?.send(`ai_message: ${JSON.stringify({
+            message: userInput,
+            thread_id: targetThreadId,
+        })}`);
+
+        aiResultPollTimerRef.current = window.setTimeout(() => {
             if (!isAiSubmittingRef.current) {
                 return;
             }
 
-            if (aiTaskCreationResult.current !== null) {
-                setAiReplyText(aiTaskCreationResult.current);
-                aiTaskCreationResult.current = null;
+            if (aiRequestDeadlineRef.current !== null && Date.now() > aiRequestDeadlineRef.current) {
+                appendMessageToThread(targetThreadId, 'system', 'AI response timed out. Please try again.');
                 stopAiSubmitting();
-                enqueueSnackbar('AI has created tasks based on your description.', { variant: 'info' });
-            } else if (aiRequestDeadlineRef.current !== null && Date.now() > aiRequestDeadlineRef.current) {
-                stopAiSubmitting();
-                enqueueSnackbar('AI response timed out. Please try again.', { variant: 'warning' });
-            } else {
-                aiResultPollTimerRef.current = window.setTimeout(checkForAiResult, 500);
             }
-        };
-        checkForAiResult();
+        }, timeoutMs + 50);
     };
 
     const openTypeCreateModal = () => {
@@ -1285,6 +1599,14 @@ function MainCalendar() {
     const displayDate = dateTransition?.nextDate ?? currentDate;
     const effectiveViewMode: ViewMode = viewTransition?.toMode ?? viewMode;
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
+    const activeAiThread = aiThreads.find(thread => thread.id === activeAiThreadId) ?? aiThreads[0] ?? null;
+
+    useEffect(() => {
+        if (!isAiModalOpen) {
+            return;
+        }
+        aiMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }, [isAiModalOpen, activeAiThreadId, aiThreads]);
 
     return (
         <main className={`calendar-container ${viewMode === 'list' ? 'list-scroll-mode' : ''} ${isFilterRefreshActive ? 'filter-refresh-active' : ''}`}>
@@ -1301,7 +1623,7 @@ function MainCalendar() {
                         <button className="today-btn" onClick={handleToday} disabled={viewTransition !== null || (dateTransition !== null && effectiveViewMode !== 'list')}>today</button>
                         <span className="button-divider" aria-hidden="true" />
                         <button className="nav-btn nav-new-event-btn" onClick={() => openCreateTaskModal(new Date())}>new event</button>
-                        <button className="nav-btn nav-ai-create-btn" onClick={openAiCreateModal}>create with ai</button>
+                        <button className="nav-btn nav-ai-create-btn" onClick={openAiCreateModal}>ai chat</button>
                     </div>
 
                     <div className="calendar-title">
@@ -1539,39 +1861,121 @@ function MainCalendar() {
                 <div className={`task-modal-backdrop ${isAiModalClosing ? 'closing' : ''}`} onClick={closeAiCreateModal}>
                     <div className={`task-modal ai-create-modal ${isAiModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
                         <div className="task-modal-header">
-                            <h2>Create With AI</h2>
+                            <h2>AI Chat Assistant</h2>
                             <button className="task-modal-close" onClick={closeAiCreateModal}>x</button>
                         </div>
 
-                        <div className="ai-modal-grid">
-                            <div className="ai-modal-section">
-                                <label className="task-modal-label" htmlFor="aiTaskDescription">Task Description</label>
-                                <textarea
-                                    id="aiTaskDescription"
-                                    className="task-modal-textarea"
-                                    placeholder="Describe what you want to create..."
-                                    value={aiTaskDescription}
-                                    onChange={(event) => handleAiTaskDescriptionChange(event.target.value)}
-                                />
-                            </div>
+                        <div className="ai-chat-layout">
+                            <div className="ai-thread-sidebar">
+                                <div className="ai-thread-sidebar-header">
+                                    <span>Threads</span>
+                                    <button className="task-modal-btn" onClick={createNewAiThread} disabled={isAiSubmitting}>New</button>
+                                </div>
 
-                            <div className="ai-modal-section">
-                                <label className="task-modal-label" htmlFor="aiReplyPanel">AI Response</label>
-                                <div id="aiReplyPanel" className="ai-reply-panel">
-                                    {aiReplyText || 'AI response will appear here.'}
+                                <div className="ai-thread-list">
+                                    {aiThreads.map(thread => {
+                                        const latestMessage = thread.messages[thread.messages.length - 1];
+                                        return (
+                                            <button
+                                                key={thread.id}
+                                                className={`ai-thread-item ${thread.id === activeAiThreadId ? 'active' : ''}`}
+                                                onClick={() => setActiveAiThreadId(thread.id)}
+                                                disabled={isAiSubmitting}
+                                            >
+                                                <div className="ai-thread-item-title">{thread.title}</div>
+                                                <div className="ai-thread-item-preview">{latestMessage?.text ?? 'No messages yet.'}</div>
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
-                        </div>
 
-                        <div className="task-modal-actions">
-                            <button className="task-modal-btn" onClick={closeAiCreateModal}>Close</button>
-                            <button
-                                className="task-modal-btn primary"
-                                onClick={handleCreateWithAi}
-                                disabled={isAiSubmitting}
-                            >
-                                {isAiSubmitting ? 'Sending...' : 'Send To AI'}
-                            </button>
+                            <div className="ai-chat-main">
+                                <div className="ai-chat-messages" aria-live="polite">
+                                    {activeAiThread?.messages.map(message => (
+                                        <div key={message.id} className={`ai-chat-message ai-chat-message-${message.role}`}>
+                                            <div className="ai-chat-message-role">{message.role}</div>
+                                            <div className="ai-chat-message-text">{message.text}</div>
+                                            {message.taskPreview && (
+                                                <div className="ai-task-preview">
+                                                    <div
+                                                        className="list-card-task clickable-task"
+                                                        style={getTaskStyle(message.taskPreview.type)}
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        onClick={() => openTaskModal({
+                                                            id: message.taskPreview!.id,
+                                                            title: message.taskPreview!.title,
+                                                            date: message.taskPreview!.date,
+                                                            time: message.taskPreview!.time,
+                                                            type: message.taskPreview!.type,
+                                                            note: message.taskPreview!.note,
+                                                        })}
+                                                        onKeyDown={(event) => {
+                                                            if (event.key === 'Enter' || event.key === ' ') {
+                                                                event.preventDefault();
+                                                                openTaskModal({
+                                                                    id: message.taskPreview!.id,
+                                                                    title: message.taskPreview!.title,
+                                                                    date: message.taskPreview!.date,
+                                                                    time: message.taskPreview!.time,
+                                                                    type: message.taskPreview!.type,
+                                                                    note: message.taskPreview!.note,
+                                                                });
+                                                            }
+                                                        }}
+                                                    >
+                                                        <div className="list-card-task-main">
+                                                            <span className="task-time">{message.taskPreview.time || '--:--'}</span>
+                                                            <span className="task-divider" aria-hidden="true" />
+                                                            {message.taskPreview.title || '(untitled task)'}
+                                                        </div>
+                                                        <div className="list-card-task-note">
+                                                            {`${message.taskPreview.date} | ${message.taskPreview.type} | #${message.taskPreview.id}`}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                    <div ref={aiMessagesEndRef} />
+                                </div>
+
+                                {isAiSubmitting && (
+                                    <div className="ai-chat-processing">
+                                        <span>AI is processing your request...</span>
+                                        <button
+                                            className="task-modal-btn"
+                                            onClick={() => cancelActiveAiRequest('AI request canceled.')}
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
+                                )}
+
+                                <div className="ai-chat-input-wrap">
+                                    <textarea
+                                        className="task-modal-textarea ai-chat-input"
+                                        placeholder="Type a message, e.g. Schedule focused work blocks for tomorrow morning."
+                                        value={aiChatInput}
+                                        onChange={(event) => handleAiChatInputChange(event.target.value)}
+                                        onKeyDown={(event) => {
+                                            if (event.key === 'Enter' && !event.shiftKey) {
+                                                event.preventDefault();
+                                                handleSendAiChatMessage();
+                                            }
+                                        }}
+                                        disabled={isAiSubmitting}
+                                    />
+                                    <button
+                                        className="task-modal-btn primary"
+                                        onClick={handleSendAiChatMessage}
+                                        disabled={isAiSubmitting || !aiChatInput.trim() || !activeAiThread}
+                                    >
+                                        {isAiSubmitting ? 'Waiting...' : 'Send'}
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
