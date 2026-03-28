@@ -1000,6 +1000,8 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                         commitmentCategory,
                         itemKind,
                         ddl,
+                        virtualDeadlineDate: buildDateString(date),
+                        virtualDeadlineTime: ddl,
                         startTime,
                         endTime,
                         note,
