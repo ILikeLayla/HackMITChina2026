@@ -194,6 +194,38 @@
   gap: 6px;
 }
 
+.task-label-stack {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.task-label-stack {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-height: 34px;
+  justify-content: center;
+}
+
+.task-main-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.task-main-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .task-title-line {
   width: 100%;
   overflow: hidden;
@@ -208,12 +240,12 @@
   justify-content: center;
   padding: 1px 6px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 9px;
   letter-spacing: 0.04em;
   font-weight: 800;
   border: 1px solid currentColor;
   opacity: 0.9;
-  line-height: 1.2;
+  line-height: 1.15;
 }
 
 .task-kind-badge.task {
@@ -222,6 +254,96 @@
 
 .task-kind-badge.event {
   background: rgba(255, 255, 255, 0.5);
+}
+
+.task-commitment-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.2;
+  border: 1px solid currentColor;
+  opacity: 0.92;
+}
+
+.task-commitment-pill.hard_commitment {
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.task-commitment-pill.flexible_work {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.task.commitment-hard_commitment,
+.day-view-task.commitment-hard_commitment,
+.list-card-task.commitment-hard_commitment {
+  border-left: 4px solid rgba(122, 19, 19, 0.45);
+}
+
+.task.commitment-flexible_work,
+.day-view-task.commitment-flexible_work,
+.list-card-task.commitment-flexible_work {
+  border-left: 4px solid rgba(28, 84, 147, 0.45);
+}
+
+.task.commitment-undetermined,
+.day-view-task.commitment-undetermined,
+.list-card-task.commitment-undetermined {
+  border-left: 4px solid transparent;
+}
+
+.task-commitment-badge {
+  display: inline-flex;
+  margin-left: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  padding: 1px 6px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  font-weight: 800;
+  line-height: 1.15;
+  vertical-align: middle;
+}
+
+.task-commitment-badge.hard_commitment {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.task-commitment-badge.flexible_work {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.task-category-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #e3e7ef;
+  border-radius: 8px;
+  background: #f8fafe;
+}
+
+.task-category-section.compact {
+  padding: 6px;
+  gap: 4px;
+}
+
+.task-category-section-title {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #2f4059;
+  text-transform: uppercase;
+}
+
+.task-category-empty {
+  font-size: 12px;
+  color: #667085;
 }
 
 .clickable-task {
@@ -340,6 +462,11 @@
 .day-view-task-main {
   font-weight: 600;
   margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: 4px;
 }
 
 .day-view-task-note {
@@ -389,7 +516,7 @@
 .list-card-tasks {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
 .list-card-task {
@@ -401,6 +528,11 @@
 .list-card-task-main {
   font-weight: 600;
   margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: 4px;
 }
 
 .list-card-task-note {
@@ -496,6 +628,30 @@
   .list-card.today {
     background: #1a365d;
     border: 1px solid #396cd8;
+  }
+
+  .task-kind-badge,
+  .task-commitment-pill,
+  .task-commitment-badge {
+    border-color: rgba(255, 255, 255, 0.5);
+  }
+
+  .task-kind-badge.task {
+    background: rgba(24, 24, 24, 0.42);
+  }
+
+  .task-kind-badge.event {
+    background: rgba(18, 18, 18, 0.56);
+  }
+
+  .task-commitment-pill.hard_commitment,
+  .task-commitment-badge.hard_commitment {
+    background: rgba(122, 45, 45, 0.42);
+  }
+
+  .task-commitment-pill.flexible_work,
+  .task-commitment-badge.flexible_work {
+    background: rgba(43, 86, 136, 0.42);
   }
 }
 

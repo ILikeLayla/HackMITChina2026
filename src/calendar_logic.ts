@@ -81,7 +81,7 @@ export function filterAndSortTasks(
                 return task.type.toLowerCase().includes(normalizedKeyword);
             }
 
-            const keywordPool = `${task.title} ${task.note} ${task.ddl} ${task.startTime} ${task.endTime} ${task.type} ${task.itemKind}`.toLowerCase();
+            const keywordPool = `${task.title} ${task.note} ${task.ddl} ${task.startTime} ${task.endTime} ${task.type} ${task.itemKind} ${task.commitmentCategory ?? ''}`.toLowerCase();
             return keywordPool.includes(normalizedKeyword);
         })
         .sort((a, b) => {

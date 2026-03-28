@@ -1,16 +1,54 @@
 export type TaskType = string;
 export type CalendarItemKind = 'task' | 'event';
+export type TaskCommitmentCategory = 'hard_commitment' | 'flexible_work' | 'undetermined';
 
 export interface CalendarTask {
     id: number;
     title: string;
     date: string;
     type: TaskType;
+    commitmentCategory?: TaskCommitmentCategory;
     itemKind: CalendarItemKind;
     ddl: string;
     startTime: string;
     endTime: string;
     note: string;
+}
+
+export function normalizeTaskCommitmentCategory(value: unknown): TaskCommitmentCategory | null {
+    if (value === 'hard_commitment' || value === 'flexible_work' || value === 'undetermined') {
+        return value;
+    }
+
+    if (typeof value !== 'string') {
+        return null;
+    }
+
+    const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (normalized === 'hard_commitment' || normalized === 'hard_commitments') {
+        return 'hard_commitment';
+    }
+    if (normalized === 'flexible_work' || normalized === 'flexible_works') {
+        return 'flexible_work';
+    }
+    if (normalized === 'undetermined') {
+        return 'undetermined';
+    }
+    return null;
+}
+
+export function getDefaultCommitmentCategoryForItemKind(_itemKind: CalendarItemKind): TaskCommitmentCategory {
+    return 'undetermined';
+}
+
+export function getTaskCommitmentCategory(task: CalendarTask): TaskCommitmentCategory {
+    return normalizeTaskCommitmentCategory(task.commitmentCategory) ?? 'undetermined';
+}
+
+export function getTaskCommitmentCategoryLabel(category: TaskCommitmentCategory): string {
+    if (category === 'hard_commitment') return 'Hard commitment';
+    if (category === 'flexible_work') return 'Flexible work';
+    return '';
 }
 
 export interface CalendarDay {

@@ -1,4 +1,9 @@
-import { getTaskDisplayTime, type CalendarDay, type CalendarTask } from "../general_utils";
+import {
+    getTaskCommitmentCategory,
+    getTaskDisplayTime,
+    type CalendarDay,
+    type CalendarTask,
+} from "../general_utils";
 
 type DayTaskQuery = (day: CalendarDay) => CalendarTask[];
 type TaskStyleResolver = (type: string) => React.CSSProperties;
@@ -49,10 +54,12 @@ export function MonthView({
                                         >
                                             <div className="day-number">{day.day}</div>
                                             <div className="tasks">
-                                                {dayTasks.map(task => (
+                                                {dayTasks.map(task => {
+                                                    const commitmentCategory = getTaskCommitmentCategory(task);
+                                                    return (
                                                     <div
                                                         key={task.id}
-                                                        className={`task clickable-task ${task.type}`}
+                                                        className={`task clickable-task ${task.type} commitment-${commitmentCategory}`}
                                                         style={getTaskStyle(task.type)}
                                                         title={`${task.title} ${getTaskDisplayTime(task)}`}
                                                         onClick={(event) => {
@@ -62,13 +69,21 @@ export function MonthView({
                                                     >
                                                         <div className="task-meta-line">
                                                             <p className="task-time">{getTaskDisplayTime(task)}</p>
-                                                            <span className={`task-kind-badge ${task.itemKind}`}>
-                                                                {task.itemKind === 'event' ? 'EVT' : 'TSK'}
+                                                            <span className="task-label-stack">
+                                                                <span className={`task-kind-badge ${task.itemKind}`}>
+                                                                    {task.itemKind === 'event' ? 'EVT' : 'TSK'}
+                                                                </span>
+                                                                {commitmentCategory !== 'undetermined' && (
+                                                                    <span className={`task-commitment-pill ${commitmentCategory}`}>
+                                                                        {commitmentCategory === 'hard_commitment' ? 'Hard' : 'Flex'}
+                                                                    </span>
+                                                                )}
                                                             </span>
                                                         </div>
                                                         <div className="task-title-line">{task.title}</div>
                                                     </div>
-                                                ))}
+                                                    );
+                                                })}
                                             </div>
                                         </div>
                                     );

@@ -1,5 +1,8 @@
 import type { CalendarTask } from "./general_utils";
-import { isValidHexColor } from "./general_utils";
+import {
+    isValidHexColor,
+    normalizeTaskCommitmentCategory,
+} from "./general_utils";
 import { FileStorage } from "./file_storage";
 
 export const TASKS_DB_KEY = 'mvp-calendar-tasks';
@@ -103,6 +106,7 @@ export async function loadTasksFromTempDb(): Promise<CalendarTask[]> {
                     title: String(task.title ?? ''),
                     date: String(task.date ?? ''),
                     type: String(task.type ?? 'other'),
+                    commitmentCategory: normalizeTaskCommitmentCategory(task.commitmentCategory) ?? 'undetermined',
                     itemKind: inferredKind,
                     ddl: inferredKind === 'task'
                         ? String(task.ddl ?? legacyTime)

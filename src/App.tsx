@@ -42,6 +42,7 @@ import {
     buildDateString,
 } from "./calendar_logic";
 import {
+    getDefaultCommitmentCategoryForItemKind,
     generateCalendarDays,
     generateWeekDays,
     getDayTitle,
@@ -50,6 +51,7 @@ import {
     isValidHexColor,
     type CalendarDay,
     type CalendarTask,
+    type TaskCommitmentCategory,
 } from "./general_utils";
 import { SnackbarProvider, closeSnackbar, enqueueSnackbar } from 'notistack';
 import { AiChatSidebar, type AiChatRole, type AiChatThread, type AiTaskPreview, type AiThreadProgress } from "./ai_chat";
@@ -156,6 +158,8 @@ function MainCalendar() {
     const [googleCalendarOptions, setGoogleCalendarOptions] = useState<GoogleCalendarSelectionItem[]>([]);
     const [selectedGoogleCalendarIds, setSelectedGoogleCalendarIds] = useState<string[]>([]);
     const [googleSyncSession, setGoogleSyncSession] = useState<GoogleCalendarSyncSession | null>(null);
+    const [isAiGoogleClassifySidebarOpen, setIsAiGoogleClassifySidebarOpen] = useState(false);
+    const [aiGoogleClassifyEventCount, setAiGoogleClassifyEventCount] = useState(0);
     const [isHeaderToolsOpen, setIsHeaderToolsOpen] = useState(false);
     const [isFilterRefreshActive, setIsFilterRefreshActive] = useState(false);
     const [filtersButtonWidth, setFiltersButtonWidth] = useState<number | null>(null);
@@ -203,6 +207,9 @@ function MainCalendar() {
     const pendingAiCalendarSnapshotRef = useRef<PendingAiCalendarSnapshot | null>(null);
     const aiCalendarStagingRef = useRef(false);
     const hasPendingAiCalendarChangesRef = useRef(false);
+
+    type PreviousSidebarSnapshot = { kind: 'ai' } | { kind: 'sos' };
+    const previousSidebarRef = useRef<PreviousSidebarSnapshot | null>(null);
 
     const cloneTasks = (source: CalendarTask[]) => source.map(task => ({ ...task }));
     const cloneTaskTypes = (source: string[]) => [...source];
@@ -488,6 +495,7 @@ function MainCalendar() {
                         title: task.title,
                         date: task.date,
                         itemKind: task.itemKind,
+                        commitmentCategory: task.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(task.itemKind),
                         ddl: task.ddl,
                         startTime: task.startTime,
                         endTime: task.endTime,
@@ -1113,6 +1121,27 @@ function MainCalendar() {
         };
     }, [viewMode, dateTransition, viewTransition, tasks, filterType, filterKeyword, searchScope]);
 
+    const captureCurrentSidebar = () => {
+        if (isAiModalOpen) {
+            previousSidebarRef.current = { kind: 'ai' };
+        } else if (isSosModalOpen) {
+            previousSidebarRef.current = { kind: 'sos' };
+        } else {
+            previousSidebarRef.current = null;
+        }
+    };
+
+    const restorePreviousSidebar = () => {
+        const prev = previousSidebarRef.current;
+        previousSidebarRef.current = null;
+        if (!prev) return;
+        if (prev.kind === 'ai') {
+            setIsAiModalOpen(true);
+        } else if (prev.kind === 'sos') {
+            setIsSosModalOpen(true);
+        }
+    };
+
     const closePanelSidebars = () => {
         setModalDraft(null);
         setSelectedTaskId(null);
@@ -1127,6 +1156,7 @@ function MainCalendar() {
     };
 
     const openTaskModal = (task: CalendarTask) => {
+        captureCurrentSidebar();
         closeOverlaySidebars();
         setIsCreatingTask(false);
         setSelectedTaskId(task.id);
@@ -1134,6 +1164,7 @@ function MainCalendar() {
             title: task.title,
             type: task.type,
             itemKind: task.itemKind,
+            commitmentCategory: task.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(task.itemKind),
             ddl: task.ddl,
             startTime: task.startTime,
             endTime: task.endTime,
@@ -1147,6 +1178,7 @@ function MainCalendar() {
             title: preview.title,
             date: preview.date,
             itemKind: preview.itemKind,
+            commitmentCategory: preview.commitmentCategory,
             ddl: preview.ddl,
             startTime: preview.startTime,
             endTime: preview.endTime,
@@ -1156,6 +1188,7 @@ function MainCalendar() {
     };
 
     const openCreateTaskModal = (date: Date) => {
+        captureCurrentSidebar();
         closeOverlaySidebars();
         const defaultType = taskTypes[0] ?? 'work';
         setIsCreatingTask(true);
@@ -1166,6 +1199,7 @@ function MainCalendar() {
             title: '',
             type: defaultType,
             itemKind: 'task',
+            commitmentCategory: 'flexible_work',
             ddl: '09:00',
             startTime: '09:00',
             endTime: '10:00',
@@ -1185,13 +1219,16 @@ function MainCalendar() {
         resetTypeModalState();
     };
 
-    const closeTaskModal = () => {
+    const closeTaskModal = (opts: { skipRestore?: boolean } = {}) => {
         if (isTypeModalOpen) {
             closeTypeModal();
         }
         setSelectedTaskId(null);
         setIsCreatingTask(false);
         setModalDraft(null);
+        if (!opts.skipRestore) {
+            restorePreviousSidebar();
+        }
     };
 
     const openAiCreateModal = () => {
@@ -1199,6 +1236,7 @@ function MainCalendar() {
             closeAiCreateModal();
             return;
         }
+        captureCurrentSidebar();
         closePanelSidebars();
         setIsSosModalOpen(false);
         setIsAiModalOpen(true);
@@ -1207,9 +1245,10 @@ function MainCalendar() {
 
     const openSosPlannerModal = () => {
         if (isSosModalOpen) {
-            setIsSosModalOpen(false);
+            closeSosPlannerModal();
             return;
         }
+        captureCurrentSidebar();
         closePanelSidebars();
         setIsAiModalOpen(false);
         setSosPlannerDraft(prev => ({
@@ -1218,8 +1257,11 @@ function MainCalendar() {
         setIsSosModalOpen(true);
     };
 
-    const closeSosPlannerModal = () => {
+    const closeSosPlannerModal = (opts: { skipRestore?: boolean } = {}) => {
         setIsSosModalOpen(false);
+        if (!opts.skipRestore) {
+            restorePreviousSidebar();
+        }
     };
 
     const sendAiRequest = (options: {
@@ -1293,6 +1335,11 @@ function MainCalendar() {
             '- Produce a concrete revised schedule with specific task order and time blocks.',
             '- Prioritize urgent and high-impact work first.',
             '- Resolve conflicts and provide realistic buffers.',
+            '- Items marked as hard_commitment (meetings, fixed appointments, deadlines) are NON-NEGOTIABLE — never reschedule or remove them.',
+            '- Items marked as flexible_work (self-directed tasks, personal projects, errands) are the primary candidates for rescheduling, deferral, or reordering.',
+            '- Items marked as undetermined may be treated as flexible_work for re-planning purposes.',
+            '- When rescheduling undetermined items, you may set their commitmentCategory to a more specific value if the intent is clear.',
+            '- When rescheduling, always preserve the commitmentCategory of each item unchanged.',
             '- Return a concise completion analysis with checkpoints, order, and estimated finish times.',
             '- Use markdown headings and a numbered action analysis.',
         ].join('\n');
@@ -1320,7 +1367,7 @@ function MainCalendar() {
 
         setAiThreads(prev => [newThread, ...prev]);
         setActiveAiThreadId(threadId);
-        closeSosPlannerModal();
+        closeSosPlannerModal({ skipRestore: true });
 
         setIsAiModalOpen(true);
         setAiChatInput('');
@@ -1334,6 +1381,72 @@ function MainCalendar() {
 
     const runSosPlanner = () => {
         runSosPlannerWithDraft(sosPlannerDraft);
+    };
+
+    const openAiGoogleClassifySidebar = (count: number) => {
+        setAiGoogleClassifyEventCount(count);
+        setIsAiGoogleClassifySidebarOpen(true);
+    };
+
+    const closeAiGoogleClassifySidebar = () => {
+        setIsAiGoogleClassifySidebarOpen(false);
+    };
+
+    const runAiGoogleClassify = () => {
+        closeAiGoogleClassifySidebar();
+        if (isAiSubmittingRef.current) {
+            enqueueSnackbar('Please wait for the current AI request to finish.', { variant: 'info' });
+            return;
+        }
+
+        const threadId = createAiThreadId();
+        const now = Date.now();
+        const count = aiGoogleClassifyEventCount;
+        const classifyPrompt = [
+            `GOOGLE CALENDAR IMPORT CLASSIFICATION: ${count} event(s) were just imported from Google Calendar with type 'google'. Please:`,
+            '',
+            '1. Fetch all current tasks and existing type colors using get_all_tasks and get_all_task_type_colors.',
+            '2. Analyze ALL tasks with type="google" together. Group them into logical types (e.g., "meeting", "lunch", "workout", "travel", "personal"). Reuse an existing type if it fits; otherwise plan to create a new one.',
+            '3. For each NEW type that does not already exist, call update_task_type_color to register it with a fitting, distinct hex color BEFORE assigning any tasks to it.',
+            '4. Now update each imported task using update_calendar_task with:',
+            '   - The determined type (which now definitely exists in the system).',
+            '   - The commitment category: "hard_commitment" for fixed obligations (meetings, appointments, deadlines), "flexible_work" for self-directed or flexible activities, "undetermined" only if genuinely unclear.',
+            '   - Do NOT change the itemKind field (event/task) — leave it exactly as it is.',
+            '5. Call update_ai_progress at major milestones (start, after analysis, after type creation, after updates, on completion).',
+            '6. Provide a brief summary of new types created and how events were classified.',
+        ].join('\n');
+
+        const newThread: AiChatThread = {
+            id: threadId,
+            title: `Classify ${count} Google event${count !== 1 ? 's' : ''}`,
+            messages: [
+                {
+                    id: createAiMessageId(),
+                    role: 'assistant',
+                    text: `Classifying ${count} imported Google Calendar event${count !== 1 ? 's' : ''}...`,
+                    createdAt: now,
+                },
+                {
+                    id: createAiMessageId(),
+                    role: 'user',
+                    text: classifyPrompt,
+                    createdAt: now + 1,
+                },
+            ],
+            createdAt: now,
+            updatedAt: now + 1,
+        };
+
+        setAiThreads(prev => [newThread, ...prev]);
+        setActiveAiThreadId(threadId);
+        setIsAiModalOpen(true);
+        setAiChatInput('');
+
+        sendAiRequest({
+            threadId,
+            userInput: classifyPrompt,
+            source: 'chat',
+        });
     };
 
     const closeAiCreateModal = () => {
@@ -1351,6 +1464,7 @@ function MainCalendar() {
         }
 
         setIsAiModalOpen(false);
+        restorePreviousSidebar();
     };
 
     const createNewAiThread = () => {
@@ -1557,6 +1671,7 @@ function MainCalendar() {
                 title: modalDraft.title.trim(),
                 type: modalDraft.type,
                 itemKind: modalDraft.itemKind,
+                commitmentCategory: (modalDraft.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(modalDraft.itemKind)) as TaskCommitmentCategory,
                 ddl: modalDraft.itemKind === 'task' ? modalDraft.ddl : '',
                 startTime: modalDraft.itemKind === 'event' ? modalDraft.startTime : '',
                 endTime: modalDraft.itemKind === 'event' ? modalDraft.endTime : '',
@@ -1572,6 +1687,7 @@ function MainCalendar() {
                         ...task,
                         title: modalDraft.title.trim(),
                         itemKind: modalDraft.itemKind,
+                        commitmentCategory: modalDraft.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(modalDraft.itemKind),
                         ddl: modalDraft.itemKind === 'task' ? modalDraft.ddl : '',
                         startTime: modalDraft.itemKind === 'event' ? modalDraft.startTime : '',
                         endTime: modalDraft.itemKind === 'event' ? modalDraft.endTime : '',
@@ -1583,7 +1699,7 @@ function MainCalendar() {
             enqueueSnackbar('Item updated.', { variant: 'success' });
         }
 
-        closeTaskModal();
+        closeTaskModal({ skipRestore: true });
     };
 
     const deleteTask = () => {
@@ -1592,7 +1708,7 @@ function MainCalendar() {
         }
 
         setTasks(prev => prev.filter(task => task.id !== selectedTask.id));
-        closeTaskModal();
+        closeTaskModal({ skipRestore: true });
         enqueueSnackbar('Item deleted.', { variant: 'error' });
     };
 
@@ -1786,6 +1902,7 @@ function MainCalendar() {
             enqueueSnackbar(`Google Calendar sync completed: ${googleEvents.length} events imported.`, {
                 variant: 'success',
             });
+            openAiGoogleClassifySidebar(googleEvents.length);
         } catch (error) {
             console.error('Google Calendar sync failed:', error);
             const message = getSyncErrorMessage(error);
@@ -1970,10 +2087,32 @@ function MainCalendar() {
                 </div>
             </aside>
 
+            <aside className={`panel-sidebar ${isAiGoogleClassifySidebarOpen ? 'open' : ''}`}>
+                <div className="panel-sidebar-header">
+                    <h2>AI Classification</h2>
+                    <button className="ai-sidebar-close" onClick={closeAiGoogleClassifySidebar} aria-label="Close">✕</button>
+                </div>
+                <div className="panel-sidebar-body">
+                    <p className="sos-sidebar-description">
+                        <strong>{aiGoogleClassifyEventCount} Google Calendar event{aiGoogleClassifyEventCount !== 1 ? 's' : ''}</strong> were just imported.
+                    </p>
+                    <p className="sos-sidebar-description">
+                        Would you like AI to analyze each event and automatically determine an appropriate <strong>task type</strong> and <strong>commitment category</strong>?
+                    </p>
+                    <p className="sos-sidebar-description">
+                        AI will assign specific types (e.g. meeting, workout, travel) and mark each event as hard commitment or flexible work based on context.
+                    </p>
+                    <div className="panel-sidebar-actions">
+                        <button className="task-modal-btn" onClick={closeAiGoogleClassifySidebar}>Skip</button>
+                        <button className="task-modal-btn primary" onClick={runAiGoogleClassify} disabled={isAiSubmitting}>Let AI Classify</button>
+                    </div>
+                </div>
+            </aside>
+
             <aside className={`sos-sidebar ${isSosModalOpen ? 'open' : ''}`}>
                     <div className="sos-sidebar-header">
                         <h2>SOS Schedule Rescue</h2>
-                        <button className="ai-sidebar-close" onClick={closeSosPlannerModal} aria-label="Close SOS sidebar">✕</button>
+                        <button className="ai-sidebar-close" onClick={() => closeSosPlannerModal()} aria-label="Close SOS sidebar">✕</button>
                     </div>
 
                     <div className="sos-sidebar-body">
@@ -1992,7 +2131,7 @@ function MainCalendar() {
                         />
 
                         <div className="sos-sidebar-actions">
-                            <button className="task-modal-btn" onClick={closeSosPlannerModal} disabled={isAiSubmitting}>Cancel</button>
+                            <button className="task-modal-btn" onClick={() => closeSosPlannerModal()} disabled={isAiSubmitting}>Cancel</button>
                             <button className="task-modal-btn primary" onClick={runSosPlanner} disabled={isAiSubmitting}>Run SOS Plan</button>
                         </div>
                     </div>

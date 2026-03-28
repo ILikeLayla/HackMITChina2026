@@ -15,6 +15,7 @@ export function buildTaskFromGoogleEvent(event: GoogleCalendarNormalizedEvent, t
         title: event.title,
         date: event.date,
         type: 'google',
+        commitmentCategory: 'undetermined',
         itemKind: 'event',
         ddl: '',
         startTime: event.startTime,

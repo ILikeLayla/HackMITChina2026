@@ -89,142 +89,108 @@ async def send_frontend_request(prefix: str, payload: dict, timeout_seconds: flo
         calendar_query_results.pop(request_id, None)
 
 @tool
-async def create_calendar_task(title: str, date: str, taskType: str, ddl: str, notes: str):
-    """Creates a calendar task with the given details.
-    Args:
-        title: The title of the task.
-        date: The date of the task in YYYY-MM-DD format.
-        taskType: The type of the task (e.g., "meeting", "reminder").
-        ddl: The deadline time of the task in HH:MM format.
-        notes: Additional notes for the task.
-    Returns:
-        A confirmation message about the task creation result.
-    """
-    logger.info(
-        "create_calendar_task called with title=%s date=%s type=%s ddl=%s",
-        title,
-        date,
-        taskType,
-        ddl,
-    )
-
-    task_json = json.dumps({
-        "title": title,
-        "date": date,
-        "type": taskType,
-        "itemKind": "task",
-        "ddl": ddl,
-        "note": notes
-    })
-    logger.info("Task payload serialized: %s", task_json)
-
-    if active_websocket is None:
-        logger.error("No active websocket client is available for task creation")
-        return "Failed to create task: No active websocket client connection."
-
-    logger.info("Sending task creation request over websocket")
-    await active_websocket.send(f"newing_task: {task_json}")
-
-    # wait for the result from the calendar system
-    try:
-        logger.info("Waiting for task creation result from queue")
-        result_info = await asyncio.wait_for(task_creation_results.get(), timeout=50)
-        logger.info("Received task creation result recieved successfully: %s", result_info)
-        return f"Task creation result: {result_info}"
-    except TimeoutError:
-        logger.warning("Timeout waiting for task creation result")
-        return "Failed to create task: No response from calendar system."
-
-
-@tool
-async def create_calendar_event(
+async def create_calendar_schedule(
     title: str,
     date: str,
     taskType: str,
-    startTime: str,
-    endTime: str,
+    itemKind: str,
     notes: str,
+    ddl: str = "",
+    startTime: str = "",
+    endTime: str = "",
+    commitmentCategory: str = "undetermined",
 ):
-    """Creates a calendar event with a time range.
+    """Creates a calendar schedule item (task or event).
 
     Args:
-        title: The title of the event.
-        date: The date of the event in YYYY-MM-DD format.
-        taskType: The type/category of the event.
-        startTime: The event start time in HH:MM format.
-        endTime: The event end time in HH:MM format.
-        notes: Additional notes for the event.
+        title: The title of the schedule item.
+        date: The date in YYYY-MM-DD format.
+        taskType: The type/category (e.g., "meeting", "homework").
+        itemKind: "task" for deadline-based items or "event" for time-range items.
+        notes: Additional notes.
+        ddl: Deadline time in HH:MM format (required when itemKind is "task").
+        startTime: Start time in HH:MM format (required when itemKind is "event").
+        endTime: End time in HH:MM format (required when itemKind is "event").
+        commitmentCategory: "hard_commitment" for fixed/non-negotiable, "flexible_work" for flexible/self-directed, "undetermined" if not yet decided. Defaults to "undetermined".
 
-    BE VERY CAREFUL NOT TO CREATE DUPLICATE EVENTS!
+    BE VERY CAREFUL NOT TO CREATE DUPLICATE ITEMS!
+    Don't forget to check if colors are assigned to the newly created schedule types.
     """
+    kind = itemKind.strip().lower()
+    if kind not in ("task", "event"):
+        return f"Invalid itemKind '{itemKind}'. Must be 'task' or 'event'."
+
     logger.info(
-        "create_calendar_event called with title=%s date=%s type=%s start=%s end=%s",
-        title,
-        date,
-        taskType,
-        startTime,
-        endTime,
+        "create_calendar_schedule called with title=%s date=%s type=%s kind=%s",
+        title, date, taskType, kind,
     )
 
-    event_json = json.dumps({
+    payload: dict = {
         "title": title,
         "date": date,
         "type": taskType,
-        "itemKind": "event",
-        "startTime": startTime,
-        "endTime": endTime,
+        "itemKind": kind,
         "note": notes,
-    })
+        "commitmentCategory": commitmentCategory,
+    }
+    if kind == "task":
+        payload["ddl"] = ddl
+    else:
+        payload["startTime"] = startTime
+        payload["endTime"] = endTime
+
+    schedule_json = json.dumps(payload)
+    logger.info("Schedule payload serialized: %s", schedule_json)
 
     if active_websocket is None:
-        logger.error("No active websocket client is available for event creation")
-        return "Failed to create event: No active websocket client connection."
+        logger.error("No active websocket client is available for schedule creation")
+        return "Failed to create schedule item: No active websocket client connection."
 
-    await active_websocket.send(f"newing_task: {event_json}")
+    await active_websocket.send(f"newing_task: {schedule_json}")
 
     try:
         result_info = await asyncio.wait_for(task_creation_results.get(), timeout=50)
-        logger.info("Received event creation result successfully: %s", result_info)
-        return f"Event creation result: {result_info}"
+        logger.info("Received schedule creation result successfully: %s", result_info)
+        return f"Schedule creation result: {result_info}"
     except TimeoutError:
-        logger.warning("Timeout waiting for event creation result")
-        return "Failed to create event: No response from calendar system."
+        logger.warning("Timeout waiting for schedule creation result")
+        return "Failed to create schedule item: No response from calendar system."
 
 @tool
-async def get_all_tasks():
-    """Returns lightweight calendar item summaries (id, title, date, itemKind, ddl/start/end, type) without notes."""
-    logger.info("get_all_tasks called")
+async def get_all_schedules():
+    """Returns lightweight schedule summaries (id, title, date, itemKind, ddl/start/end, type, commitmentCategory) without notes. Includes both tasks and events."""
+    logger.info("get_all_schedules called")
 
     result_payload = await send_frontend_request("get_all_tasks", {}, timeout_seconds=15)
     if not result_payload.get("ok", True):
         message = result_payload.get("message", "Unknown error")
-        return f"Failed to get tasks: {message}"
+        return f"Failed to get schedules: {message}"
 
-    tasks = result_payload.get("tasks", [])
-    logger.info("get_all_tasks received %s tasks", len(tasks))
-    return tasks
+    schedules = result_payload.get("tasks", [])
+    logger.info("get_all_schedules received %s items", len(schedules))
+    return schedules
 
 
 @tool
-async def get_task_by_id(task_id: int):
-    """Returns a single task by its numeric id."""
-    logger.info("get_task_by_id called with task_id=%s", task_id)
+async def get_schedule_by_id(schedule_id: int):
+    """Returns a single schedule item (task or event) by its numeric id."""
+    logger.info("get_schedule_by_id called with schedule_id=%s", schedule_id)
 
-    result_payload = await send_frontend_request("get_task_by_id", {"task_id": task_id}, timeout_seconds=15)
+    result_payload = await send_frontend_request("get_task_by_id", {"task_id": schedule_id}, timeout_seconds=15)
     if not result_payload.get("ok", True):
         message = result_payload.get("message", "Unknown error")
-        return f"Failed to get task: {message}"
+        return f"Failed to get schedule: {message}"
 
     task = result_payload.get("task")
     if task is None:
-        logger.info("Task id=%s not found", task_id)
-        return f"Task with id {task_id} was not found."
+        logger.info("Schedule id=%s not found", schedule_id)
+        return f"Schedule with id {schedule_id} was not found."
     return task
 
 
 @tool
-async def update_calendar_task(
-    task_id: int,
+async def update_calendar_schedule(
+    schedule_id: int,
     title: str = "",
     date: str = "",
     taskType: str = "",
@@ -233,9 +199,18 @@ async def update_calendar_task(
     startTime: str = "",
     endTime: str = "",
     notes: str = "",
+    commitmentCategory: str = "",
 ):
-    """Updates one calendar item by id. Empty string fields are ignored."""
-    logger.info("update_calendar_task called with task_id=%s", task_id)
+    """Updates one schedule item (task or event) by id. Empty string fields are ignored.
+
+    Args:
+        schedule_id: The numeric id of the schedule item to update.
+        itemKind: Optional — set to "task" or "event" to change the item kind.
+        commitmentCategory: Optional — "hard_commitment", "flexible_work", or "undetermined".
+
+    Don't forget to check if colors are assigned to the newly created schedule types.
+    """
+    logger.info("update_calendar_schedule called with schedule_id=%s", schedule_id)
 
     updates = {}
     if title:
@@ -254,6 +229,8 @@ async def update_calendar_task(
         updates["endTime"] = endTime
     if notes:
         updates["note"] = notes
+    if commitmentCategory:
+        updates["commitmentCategory"] = commitmentCategory
 
     if not updates:
         return "No updates were provided."
@@ -261,7 +238,7 @@ async def update_calendar_task(
     result_payload = await send_frontend_request(
         "update_task",
         {
-            "task_id": task_id,
+            "task_id": schedule_id,
             "updates": updates,
         },
         timeout_seconds=15,
@@ -269,24 +246,24 @@ async def update_calendar_task(
 
     if not result_payload.get("ok", False):
         message = result_payload.get("message", "Unknown error")
-        return f"Failed to update task: {message}"
+        return f"Failed to update schedule: {message}"
 
     updated_task = result_payload.get("task")
-    return f"Task updated successfully: {updated_task}"
+    return f"Schedule updated successfully: {updated_task}"
 
 
 @tool
-async def delete_calendar_task(task_id: int):
-    """Deletes one calendar task by id."""
-    logger.info("delete_calendar_task called with task_id=%s", task_id)
+async def delete_calendar_schedule(schedule_id: int):
+    """Deletes one schedule item (task or event) by id."""
+    logger.info("delete_calendar_schedule called with schedule_id=%s", schedule_id)
 
-    result_payload = await send_frontend_request("delete_task", {"task_id": task_id}, timeout_seconds=15)
+    result_payload = await send_frontend_request("delete_task", {"task_id": schedule_id}, timeout_seconds=15)
     if not result_payload.get("ok", False):
         message = result_payload.get("message", "Unknown error")
-        return f"Failed to delete task: {message}"
+        return f"Failed to delete schedule: {message}"
 
     deleted_task = result_payload.get("task")
-    return f"Task deleted successfully: {deleted_task}"
+    return f"Schedule deleted successfully: {deleted_task}"
 
 
 @tool
@@ -379,6 +356,7 @@ async def show_task_cards(
     task_ids: str = "",
     task_type: str = "",
     item_kind: str = "",
+    commitment_category: str = "",
     date: str = "",
     limit: int = 6,
     intro: str = "",
@@ -389,6 +367,7 @@ async def show_task_cards(
         task_ids: Optional comma-separated task ids, e.g. "1,2,8".
         task_type: Optional task type filter.
         item_kind: Optional item kind filter: "task" or "event".
+        commitment_category: Optional filter: "hard_commitment" or "flexible_work".
         date: Optional date filter in YYYY-MM-DD.
         limit: Maximum number of cards to show (1-12).
         intro: Optional message shown above the cards.
@@ -408,6 +387,7 @@ async def show_task_cards(
             "task_ids": task_ids,
             "task_type": task_type,
             "item_kind": item_kind,
+            "commitment_category": commitment_category,
             "date": date,
             "limit": limit,
             "intro": intro,
@@ -465,12 +445,11 @@ def get_time_now():
 task_creation_agent = create_agent(
     model,
     tools=[
-        create_calendar_task,
-        create_calendar_event,
-        get_all_tasks,
-        get_task_by_id,
-        update_calendar_task,
-        delete_calendar_task,
+        create_calendar_schedule,
+        get_all_schedules,
+        get_schedule_by_id,
+        update_calendar_schedule,
+        delete_calendar_schedule,
         update_task_type_color,
         rename_task_type,
         delete_task_type,
@@ -487,10 +466,14 @@ async def calendar_agent(user_message, current_thread_id, request_mode: str = "c
 
     system_prompt = (
         "You are a helpful assistant that lives in a calendar application. "
-        "You support two kinds of calendar items: task (with DDL) and event (with a start and end time). "
-        "Use create_calendar_task for tasks and create_calendar_event for events. "
+        "You manage schedule items using create_calendar_schedule with itemKind='task' (deadline-based, uses ddl) or itemKind='event' (time-range, uses startTime/endTime). "
+        "Each item also has a commitmentCategory: 'hard_commitment' for fixed, non-negotiable obligations (meetings, deadlines, appointments), "
+        "'flexible_work' for self-directed or flexible work (study sessions, personal projects, errands), "
+        "or 'undetermined' when the category is not yet known. "
+        "Default commitmentCategory is 'undetermined' unless you can clearly infer otherwise from context. "
+        "Always set commitmentCategory appropriately when creating or updating items based on context. "
         "When creating items, create new item types with appropriate color when necessary. "
-        "When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks). "
+        "When deleting schedules, check if the schedule type associated with the item can be deleted (if it is not being used by any other items). "
         "Use update_ai_progress in all chats whenever the workflow has multiple steps, external tool calls, or may take noticeable time. "
         "Send concise milestone updates (about 3-6 per request), including a start update and a final completion update."
     )

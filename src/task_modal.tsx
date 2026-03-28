@@ -1,5 +1,9 @@
 import type { Dispatch, SetStateAction } from "react";
-import { parseTaskDate, type CalendarTask } from "./general_utils";
+import {
+    parseTaskDate,
+    type CalendarTask,
+    type TaskCommitmentCategory,
+} from "./general_utils";
 
 interface TaskModalProps {
     modalDraft: Omit<CalendarTask, 'id' | 'date'> | null;
@@ -85,6 +89,20 @@ export function TaskModal({
                     >
                         <option value="task">task</option>
                         <option value="event">event</option>
+                    </select>
+
+                    <label className="task-modal-label">Schedule Category</label>
+                    <select
+                        className="task-modal-input"
+                        value={modalDraft.commitmentCategory ?? 'undetermined'}
+                        onChange={(event) => {
+                            const nextCategory = event.target.value as TaskCommitmentCategory;
+                            setModalDraft(prev => prev ? { ...prev, commitmentCategory: nextCategory } : prev);
+                        }}
+                    >
+                        <option value="undetermined">Undetermined</option>
+                        <option value="hard_commitment">Hard commitment</option>
+                        <option value="flexible_work">Flexible work</option>
                     </select>
 
                     {modalDraft.itemKind === 'task' ? (

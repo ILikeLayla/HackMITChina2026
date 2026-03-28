@@ -9,6 +9,7 @@ export type AiTaskPreview = {
     title: string;
     date: string;
     itemKind: 'task' | 'event';
+    commitmentCategory?: 'hard_commitment' | 'flexible_work' | 'undetermined';
     ddl: string;
     startTime: string;
     endTime: string;
@@ -88,6 +89,7 @@ export function AiChatSidebar({
     getTaskStyle,
 }: AiChatSidebarProps) {
     const [isThreadsOpen, setIsThreadsOpen] = useState(false);
+    const [isProgressDismissed, setIsProgressDismissed] = useState(false);
     const [width, setWidth] = useState(380);
     const isDragging = useRef(false);
     const startX = useRef(0);
@@ -114,6 +116,12 @@ export function AiChatSidebar({
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
     }, []);
+
+    useEffect(() => {
+        if (activeThreadProgress?.isActive) {
+            setIsProgressDismissed(false);
+        }
+    }, [activeThreadProgress?.isActive]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -195,11 +203,28 @@ export function AiChatSidebar({
             </div>
 
             <div className="ai-chat-main">
-                {activeThreadProgress && (
+                {activeThreadProgress && !isProgressDismissed && (
                     <div className={`ai-chat-progress-panel ${activeThreadProgress.isActive ? 'active' : 'done'}`}>
                         <div className="ai-chat-progress-head">
                             <span>AI Progress</span>
                             <span>{`${Math.max(0, Math.min(100, Math.round(activeThreadProgress.percent)))}%`}</span>
+                            {activeThreadProgress.isActive ? (
+                                <button
+                                    className="task-modal-btn ai-chat-progress-cancel"
+                                    onClick={onCancelRequest}
+                                    aria-label="Cancel AI request"
+                                >
+                                    Cancel
+                                </button>
+                            ) : (
+                                <button
+                                    className="ai-chat-progress-close"
+                                    onClick={() => setIsProgressDismissed(true)}
+                                    aria-label="Dismiss progress"
+                                >
+                                    ✕
+                                </button>
+                            )}
                         </div>
                         <div className="ai-chat-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(0, Math.min(100, Math.round(activeThreadProgress.percent)))}>
                             <div className="ai-chat-progress-fill" style={{ width: `${Math.max(0, Math.min(100, activeThreadProgress.percent))}%` }} />
@@ -267,7 +292,7 @@ export function AiChatSidebar({
                                             {message.taskPreview.title || '(untitled task)'}
                                         </div>
                                         <div className="list-card-task-note">
-                                            {`${message.taskPreview.date} | ${message.taskPreview.itemKind} | ${message.taskPreview.type} | #${message.taskPreview.id}`}
+                                            {`${message.taskPreview.date} | ${message.taskPreview.commitmentCategory === 'hard_commitment' ? 'hard commitment' : 'flexible work'} | ${message.taskPreview.itemKind} | ${message.taskPreview.type} | #${message.taskPreview.id}`}
                                         </div>
                                     </div>
                                 </div>
@@ -295,7 +320,7 @@ export function AiChatSidebar({
                                                 {taskCard.title || '(untitled task)'}
                                             </div>
                                             <div className="list-card-task-note">
-                                                {`${taskCard.date} | ${taskCard.itemKind} | ${taskCard.type} | #${taskCard.id}`}
+                                                {`${taskCard.date} | ${taskCard.commitmentCategory === 'hard_commitment' ? 'hard commitment' : 'flexible work'} | ${taskCard.itemKind} | ${taskCard.type} | #${taskCard.id}`}
                                             </div>
                                         </div>
                                     ))}
@@ -305,15 +330,6 @@ export function AiChatSidebar({
                     ))}
                     <div ref={aiMessagesEndRef} />
                 </div>
-
-                {isSubmitting && (
-                    <div className="ai-chat-processing">
-                        <span>AI is processing your request...</span>
-                        <button className="task-modal-btn" onClick={onCancelRequest}>
-                            Cancel
-                        </button>
-                    </div>
-                )}
 
                 <div className="ai-chat-input-wrap">
                     <textarea

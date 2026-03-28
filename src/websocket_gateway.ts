@@ -2,7 +2,12 @@ import { createElement, type Dispatch, type MutableRefObject, type SetStateActio
 import { closeSnackbar, enqueueSnackbar } from "notistack";
 import { defaultTypeColors } from "./db_utils";
 import { buildDateString, OTHER_TYPE } from "./calendar_logic";
-import { isValidHexColor, type CalendarTask } from "./general_utils";
+import {
+    getDefaultCommitmentCategoryForItemKind,
+    isValidHexColor,
+    normalizeTaskCommitmentCategory,
+    type CalendarTask,
+} from "./general_utils";
 import type { AiChatRole, AiTaskPreview, AiThreadProgress } from "./ai_chat";
 
 export interface GatewaySnackbarRefs {
@@ -332,6 +337,8 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
             const endTime = itemKind === 'event'
                 ? String(taskInfo.endTime ?? '')
                 : '';
+            const commitmentCategory = normalizeTaskCommitmentCategory(taskInfo.commitmentCategory)
+                ?? getDefaultCommitmentCategoryForItemKind(itemKind);
             const note = taskInfo.note || '';
             const computedTaskId = nextTaskIdRef.current;
             nextTaskIdRef.current = computedTaskId + 1;
@@ -339,6 +346,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                 id: computedTaskId,
                 title,
                 type,
+                commitmentCategory,
                 itemKind,
                 ddl,
                 startTime,
@@ -430,6 +438,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     title: task.title,
                     date: task.date,
                     itemKind: task.itemKind,
+                    commitmentCategory: task.commitmentCategory ?? getDefaultCommitmentCategoryForItemKind(task.itemKind),
                     ddl: task.ddl,
                     startTime: task.startTime,
                     endTime: task.endTime,
@@ -510,6 +519,18 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     ...(payload.updates?.title !== undefined ? { title: String(payload.updates.title) } : {}),
                     ...(payload.updates?.date !== undefined ? { date: String(payload.updates.date) } : {}),
                     ...(payload.updates?.type !== undefined ? { type: String(payload.updates.type) } : {}),
+                    ...(payload.updates?.commitmentCategory !== undefined
+                        ? {
+                            commitmentCategory: normalizeTaskCommitmentCategory(payload.updates.commitmentCategory)
+                                ?? getDefaultCommitmentCategoryForItemKind(
+                                    payload.updates.itemKind === 'event'
+                                        ? 'event'
+                                        : payload.updates.itemKind === 'task'
+                                            ? 'task'
+                                            : existingTask.itemKind,
+                                ),
+                        }
+                        : {}),
                     ...(payload.updates?.ddl !== undefined ? { ddl: String(payload.updates.ddl) } : {}),
                     ...(payload.updates?.startTime !== undefined ? { startTime: String(payload.updates.startTime) } : {}),
                     ...(payload.updates?.endTime !== undefined ? { endTime: String(payload.updates.endTime) } : {}),
