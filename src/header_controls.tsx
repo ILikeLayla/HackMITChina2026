@@ -1,9 +1,10 @@
-import type { RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { SearchScope, ViewMode } from "./calendar_logic";
 
 interface HeaderControlsProps {
     effectiveViewMode: ViewMode;
     displayTitle: string;
+    currentDisplayDate: Date;
     dateTransitionActive: boolean;
     viewTransitionActive: boolean;
     isHeaderToolsOpen: boolean;
@@ -17,6 +18,7 @@ interface HeaderControlsProps {
     onPrev: () => void;
     onNext: () => void;
     onToday: () => void;
+    onJumpToDate: (date: Date) => void;
     onOpenCreateEvent: () => void;
     onOpenAiChat: () => void;
     onOpenSosPlanner: () => void;
@@ -32,6 +34,7 @@ interface HeaderControlsProps {
 export function HeaderControls({
     effectiveViewMode,
     displayTitle,
+    currentDisplayDate,
     dateTransitionActive,
     viewTransitionActive,
     isHeaderToolsOpen,
@@ -45,6 +48,7 @@ export function HeaderControls({
     onPrev,
     onNext,
     onToday,
+    onJumpToDate,
     onOpenCreateEvent,
     onOpenAiChat,
     onOpenSosPlanner,
@@ -56,6 +60,100 @@ export function HeaderControls({
     onFilterKeywordChange,
     onSearchScopeChange,
 }: HeaderControlsProps) {
+    const [isJumpToDateOpen, setIsJumpToDateOpen] = useState(false);
+    const [jumpSelectedDate, setJumpSelectedDate] = useState(() => new Date(currentDisplayDate));
+    const [jumpCalendarMonth, setJumpCalendarMonth] = useState(() => new Date(currentDisplayDate.getFullYear(), currentDisplayDate.getMonth(), 1));
+    const jumpToDateRef = useRef<HTMLDivElement | null>(null);
+
+    const dayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+    const isSameCalendarDay = (left: Date, right: Date) => (
+        left.getFullYear() === right.getFullYear() &&
+        left.getMonth() === right.getMonth() &&
+        left.getDate() === right.getDate()
+    );
+
+    const getCalendarGridDays = (monthDate: Date) => {
+        const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+        const firstWeekday = firstDay.getDay();
+        const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
+        const cells: Array<Date | null> = [];
+
+        for (let index = 0; index < firstWeekday; index += 1) {
+            cells.push(null);
+        }
+
+        for (let day = 1; day <= daysInMonth; day += 1) {
+            cells.push(new Date(monthDate.getFullYear(), monthDate.getMonth(), day));
+        }
+
+        while (cells.length < 42) {
+            cells.push(null);
+        }
+
+        return cells;
+    };
+
+    useEffect(() => {
+        if (!isJumpToDateOpen) {
+            setJumpSelectedDate(new Date(currentDisplayDate));
+            setJumpCalendarMonth(new Date(currentDisplayDate.getFullYear(), currentDisplayDate.getMonth(), 1));
+        }
+    }, [currentDisplayDate, isJumpToDateOpen]);
+
+    useEffect(() => {
+        if (!isJumpToDateOpen) {
+            return;
+        }
+
+        const handleOutsideClick = (event: MouseEvent) => {
+            if (!jumpToDateRef.current?.contains(event.target as Node)) {
+                setIsJumpToDateOpen(false);
+            }
+        };
+
+        document.addEventListener('mousedown', handleOutsideClick);
+        return () => {
+            document.removeEventListener('mousedown', handleOutsideClick);
+        };
+    }, [isJumpToDateOpen]);
+
+    const handleToggleJumpToDate = () => {
+        const nextOpen = !isJumpToDateOpen;
+        if (nextOpen) {
+            setJumpSelectedDate(new Date(currentDisplayDate));
+            setJumpCalendarMonth(new Date(currentDisplayDate.getFullYear(), currentDisplayDate.getMonth(), 1));
+        }
+        setIsJumpToDateOpen(nextOpen);
+    };
+
+    const handleSubmitJumpToDate = () => {
+        if (Number.isNaN(jumpSelectedDate.getTime())) {
+            return;
+        }
+
+        onJumpToDate(jumpSelectedDate);
+        setIsJumpToDateOpen(false);
+    };
+
+    const handleShiftJumpMonth = (direction: -1 | 1) => {
+        setJumpCalendarMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + direction, 1));
+    };
+
+    const handleSelectJumpDay = (dayDate: Date) => {
+        setJumpSelectedDate(dayDate);
+    };
+
+    const handleJumpToday = () => {
+        const today = new Date();
+        setJumpSelectedDate(today);
+        setJumpCalendarMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    };
+
+    const jumpMonthLabel = `${jumpCalendarMonth.toLocaleString('default', { month: 'long' })} ${jumpCalendarMonth.getFullYear()}`;
+    const jumpCalendarDays = getCalendarGridDays(jumpCalendarMonth);
+    const today = new Date();
+
     return (
         <div className="calendar-header sticky-header">
             <div className="header-top-row">
@@ -82,7 +180,58 @@ export function HeaderControls({
                     <button className="nav-btn nav-sos-btn" onClick={onOpenSosPlanner}>SOS</button>
                 </div>
 
-                <div className="calendar-title">{displayTitle}</div>
+                <div className="calendar-title" ref={jumpToDateRef}>
+                    <button
+                        type="button"
+                        className="calendar-title-btn"
+                        onClick={handleToggleJumpToDate}
+                        aria-haspopup="dialog"
+                        aria-expanded={isJumpToDateOpen}
+                        title="Jump to date"
+                    >
+                        {displayTitle}
+                    </button>
+                    {isJumpToDateOpen && (
+                        <div className="jump-to-date-popout" role="dialog" aria-label="Jump to date">
+                            <div className="jump-to-date-month-header">
+                                <button type="button" className="nav-btn jump-month-nav-btn" onClick={() => handleShiftJumpMonth(-1)}>&lt;</button>
+                                <span>{jumpMonthLabel}</span>
+                                <button type="button" className="nav-btn jump-month-nav-btn" onClick={() => handleShiftJumpMonth(1)}>&gt;</button>
+                            </div>
+                            <div className="jump-to-date-weekdays" aria-hidden="true">
+                                {dayLabels.map(label => (
+                                    <span key={label}>{label}</span>
+                                ))}
+                            </div>
+                            <div className="jump-to-date-grid">
+                                {jumpCalendarDays.map((dayDate, index) => {
+                                    if (!dayDate) {
+                                        return <span key={`empty-${index}`} className="jump-to-date-empty" aria-hidden="true" />;
+                                    }
+
+                                    const isSelected = isSameCalendarDay(dayDate, jumpSelectedDate);
+                                    const isToday = isSameCalendarDay(dayDate, today);
+
+                                    return (
+                                        <button
+                                            key={`${dayDate.getFullYear()}-${dayDate.getMonth()}-${dayDate.getDate()}`}
+                                            type="button"
+                                            className={`jump-to-date-day ${isSelected ? 'selected' : ''} ${isToday ? 'today' : ''}`}
+                                            onClick={() => handleSelectJumpDay(dayDate)}
+                                        >
+                                            {dayDate.getDate()}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <div className="jump-to-date-actions">
+                                <button type="button" className="nav-btn" onClick={handleJumpToday}>Today</button>
+                                <button type="button" className="nav-btn" onClick={handleSubmitJumpToDate}>Go</button>
+                                <button type="button" className="nav-btn" onClick={() => setIsJumpToDateOpen(false)}>Cancel</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
 
                 <div className="view-selector">
                     <button className={`view-btn ${effectiveViewMode === 'month' ? 'active' : ''}`} onClick={() => onViewChange('month')} disabled={viewTransitionActive}>month</button>

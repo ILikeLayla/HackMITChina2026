@@ -728,6 +728,23 @@ function MainCalendar() {
         startDateTransition(targetDate, direction);
     };
 
+    const handleJumpToDate = (targetDate: Date) => {
+        if (viewTransition) {
+            return;
+        }
+
+        if (viewMode !== 'list' && dateTransition) {
+            return;
+        }
+
+        if (isSameDay(currentDate, targetDate)) {
+            return;
+        }
+
+        const direction: DateTransitionDirection = targetDate.getTime() >= currentDate.getTime() ? 'forward' : 'backward';
+        startDateTransition(targetDate, direction);
+    };
+
     const handleViewChange = (mode: ViewMode) => {
         if (mode === viewMode || viewTransition) {
             return;
@@ -1745,6 +1762,7 @@ function MainCalendar() {
             <HeaderControls
                 effectiveViewMode={effectiveViewMode}
                 displayTitle={displayTitle}
+                currentDisplayDate={displayDate}
                 dateTransitionActive={dateTransition !== null}
                 viewTransitionActive={viewTransition !== null}
                 isHeaderToolsOpen={isHeaderToolsOpen}
@@ -1758,6 +1776,7 @@ function MainCalendar() {
                 onPrev={handlePrevMonth}
                 onNext={handleNextMonth}
                 onToday={handleToday}
+                onJumpToDate={handleJumpToDate}
                 onOpenCreateEvent={() => openCreateTaskModal(new Date())}
                 onOpenAiChat={openAiCreateModal}
                 onOpenSosPlanner={openSosPlannerModal}
