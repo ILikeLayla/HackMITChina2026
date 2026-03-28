@@ -442,6 +442,178 @@ def get_time_now():
     return current_time
 
 
+@tool
+async def batch_create_schedules(items_json: str):
+    """Creates multiple schedule items in a single batch call. MUCH faster than calling create_calendar_schedule multiple times.
+
+    Args:
+        items_json: A JSON-encoded array of items. Each item is an object with keys:
+            title (str), date (str, YYYY-MM-DD), taskType (str), itemKind ("task"|"event"),
+            notes (str), ddl (str, HH:MM, for tasks), startTime (str, HH:MM, for events),
+            endTime (str, HH:MM, for events), commitmentCategory ("hard_commitment"|"flexible_work"|"undetermined").
+            Example: '[{"title":"Meeting","date":"2026-03-28","taskType":"meeting","itemKind":"event","notes":"","startTime":"09:00","endTime":"10:00","commitmentCategory":"hard_commitment"}]'
+
+    ALWAYS prefer this tool over calling create_calendar_schedule multiple times.
+    Don't forget to check if colors are assigned to the newly created schedule types.
+    """
+    try:
+        items = json.loads(items_json)
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+
+    if not isinstance(items, list) or len(items) == 0:
+        return "items_json must be a non-empty JSON array."
+
+    if len(items) > 50:
+        return "Too many items (max 50 per batch)."
+
+    logger.info("batch_create_schedules called with %d items", len(items))
+
+    normalized = []
+    for i, item in enumerate(items):
+        kind = (item.get("itemKind", "") or "").strip().lower()
+        if kind not in ("task", "event"):
+            return f"Item {i}: Invalid itemKind '{item.get('itemKind')}'. Must be 'task' or 'event'."
+
+        payload = {
+            "title": item.get("title", ""),
+            "date": item.get("date", ""),
+            "type": item.get("taskType", "other"),
+            "itemKind": kind,
+            "note": item.get("notes", ""),
+            "commitmentCategory": item.get("commitmentCategory", "undetermined"),
+        }
+        if kind == "task":
+            payload["ddl"] = item.get("ddl", "")
+        else:
+            payload["startTime"] = item.get("startTime", "")
+            payload["endTime"] = item.get("endTime", "")
+        normalized.append(payload)
+
+    result_payload = await send_frontend_request(
+        "batch_create_tasks",
+        {"items": normalized},
+        timeout_seconds=30,
+    )
+
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Batch create failed: {message}"
+
+    created_tasks = result_payload.get("tasks", [])
+    return f"Successfully created {len(created_tasks)} schedule item(s): {json.dumps(created_tasks)}"
+
+
+@tool
+async def batch_update_schedules(updates_json: str):
+    """Updates multiple schedule items at once. MUCH faster than calling update_calendar_schedule multiple times.
+
+    Args:
+        updates_json: A JSON-encoded array of update objects. Each object has:
+            schedule_id (int) — the id of the item to update,
+            plus any optional fields to change: title, date, taskType, itemKind, ddl, startTime, endTime, notes, commitmentCategory.
+            Empty/missing fields are left unchanged.
+            Example: '[{"schedule_id":1,"title":"New Title"},{"schedule_id":3,"date":"2026-04-01"}]'
+
+    ALWAYS prefer this tool over calling update_calendar_schedule multiple times.
+    Don't forget to check if colors are assigned to the newly created schedule types.
+    """
+    try:
+        updates = json.loads(updates_json)
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+
+    if not isinstance(updates, list) or len(updates) == 0:
+        return "updates_json must be a non-empty JSON array."
+
+    if len(updates) > 50:
+        return "Too many updates (max 50 per batch)."
+
+    logger.info("batch_update_schedules called with %d updates", len(updates))
+
+    normalized = []
+    for i, item in enumerate(updates):
+        schedule_id = item.get("schedule_id")
+        if schedule_id is None:
+            return f"Item {i}: schedule_id is required."
+
+        fields = {}
+        if item.get("title"):
+            fields["title"] = item["title"]
+        if item.get("date"):
+            fields["date"] = item["date"]
+        if item.get("taskType"):
+            fields["type"] = item["taskType"]
+        if item.get("itemKind"):
+            fields["itemKind"] = item["itemKind"]
+        if item.get("ddl"):
+            fields["ddl"] = item["ddl"]
+        if item.get("startTime"):
+            fields["startTime"] = item["startTime"]
+        if item.get("endTime"):
+            fields["endTime"] = item["endTime"]
+        if item.get("notes"):
+            fields["note"] = item["notes"]
+        if item.get("commitmentCategory"):
+            fields["commitmentCategory"] = item["commitmentCategory"]
+
+        normalized.append({"task_id": schedule_id, "updates": fields})
+
+    result_payload = await send_frontend_request(
+        "batch_update_tasks",
+        {"updates": normalized},
+        timeout_seconds=30,
+    )
+
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Batch update failed: {message}"
+
+    results = result_payload.get("results", [])
+    success_count = sum(1 for r in results if r.get("ok"))
+    return f"Batch update completed: {success_count}/{len(results)} succeeded. Details: {json.dumps(results)}"
+
+
+@tool
+async def batch_delete_schedules(schedule_ids_json: str):
+    """Deletes multiple schedule items at once. MUCH faster than calling delete_calendar_schedule multiple times.
+
+    Args:
+        schedule_ids_json: A JSON-encoded array of numeric schedule ids to delete, e.g. "[1, 3, 7]".
+
+    ALWAYS prefer this tool over calling delete_calendar_schedule repeatedly.
+    """
+    try:
+        schedule_ids = json.loads(schedule_ids_json)
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+
+    if not isinstance(schedule_ids, list) or len(schedule_ids) == 0:
+        return "schedule_ids_json must be a non-empty JSON array of numbers."
+
+    if len(schedule_ids) > 50:
+        return "Too many ids (max 50 per batch)."
+
+    logger.info("batch_delete_schedules called with %d ids", len(schedule_ids))
+
+    result_payload = await send_frontend_request(
+        "batch_delete_tasks",
+        {"task_ids": schedule_ids},
+        timeout_seconds=30,
+    )
+
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Batch delete failed: {message}"
+
+    deleted = result_payload.get("deleted", [])
+    not_found = result_payload.get("not_found_ids", [])
+    summary = f"Deleted {len(deleted)} item(s)."
+    if not_found:
+        summary += f" Not found: {not_found}."
+    return summary
+
+
 task_creation_agent = create_agent(
     model,
     tools=[
@@ -457,6 +629,9 @@ task_creation_agent = create_agent(
         show_task_cards,
         update_ai_progress,
         get_time_now,
+        batch_create_schedules,
+        batch_update_schedules,
+        batch_delete_schedules,
     ],
     checkpointer=InMemorySaver(),
 )
@@ -475,7 +650,8 @@ async def calendar_agent(user_message, current_thread_id, request_mode: str = "c
         "When creating items, create new item types with appropriate color when necessary. "
         "When deleting schedules, check if the schedule type associated with the item can be deleted (if it is not being used by any other items). "
         "Use update_ai_progress in all chats whenever the workflow has multiple steps, external tool calls, or may take noticeable time. "
-        "Send concise milestone updates (about 3-6 per request), including a start update and a final completion update."
+        "Send concise milestone updates (about 3-6 per request), including a start update and a final completion update. "
+        "IMPORTANT: When creating, updating, or deleting multiple schedule items, ALWAYS use batch_create_schedules, batch_update_schedules, or batch_delete_schedules instead of calling the single-item tools in a loop. Batch tools are dramatically faster."
     )
 
     initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
@@ -664,6 +840,23 @@ async def listen(websocket):
                         waiter.set_result(result_payload)
                 except json.JSONDecodeError:
                     logger.error("Failed to decode show_task_cards_result JSON: %s", result_json)
+            for batch_prefix in [
+                "batch_create_tasks_result: ",
+                "batch_update_tasks_result: ",
+                "batch_delete_tasks_result: ",
+            ]:
+                if message.startswith(batch_prefix):
+                    result_json = message[len(batch_prefix):]
+                    try:
+                        result_payload = json.loads(result_json)
+                        request_id = result_payload.get("request_id")
+                        if request_id:
+                            waiter = calendar_query_results.get(request_id)
+                            if waiter and not waiter.done():
+                                waiter.set_result(result_payload)
+                    except json.JSONDecodeError:
+                        logger.error("Failed to decode %s JSON: %s", batch_prefix.strip(), result_json)
+                    break
     finally:
         for task in background_tasks:
             task.cancel()

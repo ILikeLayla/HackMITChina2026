@@ -937,6 +937,248 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                 console.error('Failed to parse show_task_cards payload:', error);
             }
         }
+
+        // ── Batch create ──
+        if (typeof event.data === 'string' && event.data.startsWith('batch_create_tasks: ')) {
+            const payloadText = event.data.substring('batch_create_tasks: '.length);
+            try {
+                const payload = JSON.parse(payloadText) as {
+                    request_id?: string;
+                    items?: Array<{
+                        title?: string;
+                        date?: string;
+                        type?: string;
+                        itemKind?: string;
+                        ddl?: string;
+                        startTime?: string;
+                        endTime?: string;
+                        note?: string;
+                        commitmentCategory?: string;
+                    }>;
+                };
+                if (!payload.request_id) {
+                    return;
+                }
+
+                const items = payload.items ?? [];
+                if (!Array.isArray(items) || items.length === 0) {
+                    ws.current?.send(`batch_create_tasks_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: false,
+                        message: 'No items provided.',
+                    })}`);
+                    return;
+                }
+
+                const createdTasks: CalendarTask[] = [];
+
+                for (const taskInfo of items) {
+                    const date = taskInfo.date ? new Date(taskInfo.date) : new Date();
+                    const title = taskInfo.title || '';
+                    const type = taskInfo.type || 'other';
+
+                    if (!taskTypesRef.current.includes(type)) {
+                        const randomColor = `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`;
+                        applyTaskTypes(prev => [...prev, type]);
+                        applyTaskTypeColors(prev => ({ ...prev, [type]: randomColor }));
+                    }
+
+                    const itemKind: CalendarTask['itemKind'] = taskInfo.itemKind === 'event' ? 'event' : 'task';
+                    const ddl = itemKind === 'task' ? String(taskInfo.ddl ?? '') : '';
+                    const startTime = itemKind === 'event' ? String(taskInfo.startTime ?? '') : '';
+                    const endTime = itemKind === 'event' ? String(taskInfo.endTime ?? '') : '';
+                    const commitmentCategory = normalizeTaskCommitmentCategory(taskInfo.commitmentCategory)
+                        ?? getDefaultCommitmentCategoryForItemKind(itemKind);
+                    const note = taskInfo.note || '';
+                    const computedTaskId = nextTaskIdRef.current;
+                    nextTaskIdRef.current = computedTaskId + 1;
+
+                    createdTasks.push({
+                        id: computedTaskId,
+                        title,
+                        type,
+                        commitmentCategory,
+                        itemKind,
+                        ddl,
+                        startTime,
+                        endTime,
+                        note,
+                        date: buildDateString(date),
+                    });
+                }
+
+                applyTasks(prev => [...prev, ...createdTasks]);
+                if (isAiSubmittingRef.current) {
+                    aiRequestDeadlineRef.current = Date.now() + aiRequestTimeoutMs;
+                }
+                registerMutationForCurrentThread();
+                appendTaskEventMessageToActiveThread(
+                    `AI created ${createdTasks.length} task(s) in batch: ${createdTasks.map(t => t.title || '(untitled)').join(', ')}`,
+                );
+
+                ws.current?.send(`batch_create_tasks_result: ${JSON.stringify({
+                    request_id: payload.request_id,
+                    ok: true,
+                    tasks: createdTasks,
+                })}`);
+            } catch (error) {
+                console.error('Failed to parse batch_create_tasks payload:', error);
+            }
+        }
+
+        // ── Batch update ──
+        if (typeof event.data === 'string' && event.data.startsWith('batch_update_tasks: ')) {
+            const payloadText = event.data.substring('batch_update_tasks: '.length);
+            try {
+                const payload = JSON.parse(payloadText) as {
+                    request_id?: string;
+                    updates?: Array<{
+                        task_id: number | string;
+                        updates: Partial<CalendarTask>;
+                    }>;
+                };
+                if (!payload.request_id) {
+                    return;
+                }
+
+                const updateItems = payload.updates ?? [];
+                if (!Array.isArray(updateItems) || updateItems.length === 0) {
+                    ws.current?.send(`batch_update_tasks_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: false,
+                        message: 'No updates provided.',
+                    })}`);
+                    return;
+                }
+
+                const results: Array<{ task_id: number; ok: boolean; task?: CalendarTask; message?: string }> = [];
+
+                for (const item of updateItems) {
+                    const taskId = Number(item.task_id);
+                    if (!Number.isFinite(taskId) || !item.updates) {
+                        results.push({ task_id: taskId, ok: false, message: 'Invalid task_id or updates.' });
+                        continue;
+                    }
+
+                    const existingTask = tasksRef.current.find(t => t.id === taskId);
+                    if (!existingTask) {
+                        results.push({ task_id: taskId, ok: false, message: `Task ${taskId} not found.` });
+                        continue;
+                    }
+
+                    const updatedTask: CalendarTask = {
+                        ...existingTask,
+                        ...(item.updates.itemKind !== undefined
+                            ? { itemKind: item.updates.itemKind === 'event' ? 'event' as const : 'task' as const }
+                            : {}),
+                        ...(item.updates.title !== undefined ? { title: String(item.updates.title) } : {}),
+                        ...(item.updates.date !== undefined ? { date: String(item.updates.date) } : {}),
+                        ...(item.updates.type !== undefined ? { type: String(item.updates.type) } : {}),
+                        ...(item.updates.commitmentCategory !== undefined
+                            ? {
+                                commitmentCategory: normalizeTaskCommitmentCategory(item.updates.commitmentCategory)
+                                    ?? getDefaultCommitmentCategoryForItemKind(
+                                        item.updates.itemKind === 'event'
+                                            ? 'event'
+                                            : item.updates.itemKind === 'task'
+                                                ? 'task'
+                                                : existingTask.itemKind,
+                                    ),
+                            }
+                            : {}),
+                        ...(item.updates.ddl !== undefined ? { ddl: String(item.updates.ddl) } : {}),
+                        ...(item.updates.startTime !== undefined ? { startTime: String(item.updates.startTime) } : {}),
+                        ...(item.updates.endTime !== undefined ? { endTime: String(item.updates.endTime) } : {}),
+                        ...('time' in item.updates && (item.updates as { time?: unknown }).time !== undefined
+                            ? (existingTask.itemKind === 'event'
+                                ? { startTime: String((item.updates as { time?: unknown }).time) }
+                                : { ddl: String((item.updates as { time?: unknown }).time) })
+                            : {}),
+                        ...(item.updates.note !== undefined ? { note: String(item.updates.note) } : {}),
+                    };
+
+                    applyTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+
+                    if (!taskTypesRef.current.includes(updatedTask.type)) {
+                        applyTaskTypes(prev => [...prev, updatedTask.type]);
+                        applyTaskTypeColors(prev => ({
+                            ...prev,
+                            [updatedTask.type]: prev[updatedTask.type] ?? defaultTypeColors[OTHER_TYPE],
+                        }));
+                    }
+
+                    results.push({ task_id: taskId, ok: true, task: updatedTask });
+                }
+
+                const successCount = results.filter(r => r.ok).length;
+                if (successCount > 0) {
+                    registerMutationForCurrentThread();
+                    appendTaskEventMessageToActiveThread(
+                        `AI updated ${successCount} task(s) in batch`,
+                    );
+                }
+                if (isAiSubmittingRef.current) {
+                    aiRequestDeadlineRef.current = Date.now() + aiRequestTimeoutMs;
+                }
+
+                ws.current?.send(`batch_update_tasks_result: ${JSON.stringify({
+                    request_id: payload.request_id,
+                    ok: true,
+                    results,
+                })}`);
+            } catch (error) {
+                console.error('Failed to parse batch_update_tasks payload:', error);
+            }
+        }
+
+        // ── Batch delete ──
+        if (typeof event.data === 'string' && event.data.startsWith('batch_delete_tasks: ')) {
+            const payloadText = event.data.substring('batch_delete_tasks: '.length);
+            try {
+                const payload = JSON.parse(payloadText) as {
+                    request_id?: string;
+                    task_ids?: Array<number | string>;
+                };
+                if (!payload.request_id) {
+                    return;
+                }
+
+                const taskIds = (payload.task_ids ?? []).map(Number).filter(Number.isFinite);
+                if (taskIds.length === 0) {
+                    ws.current?.send(`batch_delete_tasks_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: false,
+                        message: 'No task ids provided.',
+                    })}`);
+                    return;
+                }
+
+                const idSet = new Set(taskIds);
+                const deletedTasks = tasksRef.current.filter(t => idSet.has(t.id));
+                const notFoundIds = taskIds.filter(id => !tasksRef.current.some(t => t.id === id));
+
+                applyTasks(prev => prev.filter(t => !idSet.has(t.id)));
+
+                if (deletedTasks.length > 0) {
+                    registerMutationForCurrentThread();
+                    appendTaskEventMessageToActiveThread(
+                        `AI deleted ${deletedTasks.length} task(s) in batch: ${deletedTasks.map(t => t.title || '(untitled)').join(', ')}`,
+                    );
+                }
+                if (isAiSubmittingRef.current) {
+                    aiRequestDeadlineRef.current = Date.now() + aiRequestTimeoutMs;
+                }
+
+                ws.current?.send(`batch_delete_tasks_result: ${JSON.stringify({
+                    request_id: payload.request_id,
+                    ok: true,
+                    deleted: deletedTasks,
+                    not_found_ids: notFoundIds,
+                })}`);
+            } catch (error) {
+                console.error('Failed to parse batch_delete_tasks payload:', error);
+            }
+        }
     };
 
     const handleOpen = () => {
