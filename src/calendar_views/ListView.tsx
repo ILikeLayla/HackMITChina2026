@@ -56,7 +56,7 @@ export function ListView({
                                         <span className="task-main-title">{task.title}</span>
                                     </span>
                                     <span className="task-label-stack">
-                                        <span className={`task-kind-badge ${task.itemKind}`}>
+                                        <span className={`task-kind-badge ${task.itemKind === 'event' ? 'kind-event' : 'kind-task'}`}>
                                             {task.itemKind === 'event' ? 'EVT' : 'TSK'}
                                         </span>
                                         {category !== 'undetermined' && (

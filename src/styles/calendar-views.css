@@ -192,15 +192,18 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
+  min-width: 0;
 }
 
 .task-label-stack {
-  display: inline-flex;
+  display: flex;
   flex-direction: row;
   align-items: center;
   gap: 4px;
   margin-left: auto;
   flex: 0 0 auto;
+  text-align: right;
 }
 
 .task-label-stack {
@@ -209,6 +212,12 @@
   gap: 2px;
   min-height: 34px;
   justify-content: center;
+}
+
+.task-label-stack > .task-kind-badge,
+.task-label-stack > .task-commitment-pill,
+.task-label-stack > .task-commitment-badge {
+  align-self: flex-end;
 }
 
 .task-main-left {
@@ -250,11 +259,11 @@
   box-sizing: border-box;
 }
 
-.task-kind-badge.task {
+.task-kind-badge.kind-task {
   background: rgba(255, 255, 255, 0.3);
 }
 
-.task-kind-badge.event {
+.task-kind-badge.kind-event {
   background: rgba(255, 255, 255, 0.5);
 }
 
@@ -640,11 +649,11 @@
     border-color: rgba(255, 255, 255, 0.5);
   }
 
-  .task-kind-badge.task {
+  .task-kind-badge.kind-task {
     background: rgba(24, 24, 24, 0.42);
   }
 
-  .task-kind-badge.event {
+  .task-kind-badge.kind-event {
     background: rgba(18, 18, 18, 0.56);
   }
 

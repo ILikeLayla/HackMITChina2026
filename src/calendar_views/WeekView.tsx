@@ -64,7 +64,7 @@ export function WeekView({
                                                 <div className="task-meta-line">
                                                     <p className="task-time">{getTaskDisplayTime(task, deadlineMode)}</p>
                                                     <span className="task-label-stack">
-                                                        <span className={`task-kind-badge ${task.itemKind}`}>
+                                                        <span className={`task-kind-badge ${task.itemKind === 'event' ? 'kind-event' : 'kind-task'}`}>
                                                             {task.itemKind === 'event' ? 'EVT' : 'TSK'}
                                                         </span>
                                                         {commitmentCategory !== 'undetermined' && (
