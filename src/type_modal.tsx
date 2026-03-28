@@ -3,8 +3,6 @@ import { isValidHexColor } from "./general_utils";
 
 interface TypeModalProps {
     isOpen: boolean;
-    isClosing: boolean;
-    shouldElevate: boolean;
     mode: 'create' | 'edit';
     editingOriginalName: string | null;
     draftName: string;
@@ -19,8 +17,6 @@ interface TypeModalProps {
 
 export function TypeModal({
     isOpen,
-    isClosing,
-    shouldElevate,
     mode,
     editingOriginalName,
     draftName,
@@ -32,21 +28,14 @@ export function TypeModal({
     setDraftName,
     setDraftColor,
 }: TypeModalProps) {
-    if (!isOpen) {
-        return null;
-    }
-
     return (
-        <div
-            className={`task-modal-backdrop ${isClosing ? 'closing' : ''} ${shouldElevate ? 'modal-over-ai' : ''}`}
-            onClick={onClose}
-        >
-            <div className={`task-modal type-create-modal ${isClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
-                <div className="task-modal-header">
-                    <h2>{mode === 'edit' ? 'Edit Type' : 'Create Type'}</h2>
-                    <button className="task-modal-close" onClick={onClose}>x</button>
-                </div>
+        <aside className={`panel-sidebar panel-sidebar-elevated ${isOpen ? 'open' : ''}`}>
+            <div className="panel-sidebar-header">
+                <h2>{mode === 'edit' ? 'Edit Type' : 'Create Type'}</h2>
+                <button className="ai-sidebar-close" onClick={onClose} aria-label="Close">✕</button>
+            </div>
 
+            <div className="panel-sidebar-body">
                 <label className="task-modal-label">Type Name</label>
                 <input
                     className="task-modal-input"
@@ -70,7 +59,7 @@ export function TypeModal({
                     />
                 </div>
 
-                <div className="task-modal-actions">
+                <div className="panel-sidebar-actions">
                     {mode === 'edit' && editingOriginalName !== otherType && (
                         <button className="task-modal-btn danger" onClick={onDeleteAndMoveToOther}>
                             Delete Type (move to other)
@@ -86,6 +75,6 @@ export function TypeModal({
                     </button>
                 </div>
             </div>
-        </div>
+        </aside>
     );
 }

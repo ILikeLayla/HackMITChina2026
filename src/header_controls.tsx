@@ -155,6 +155,7 @@ export function HeaderControls({
     const today = new Date();
 
     return (
+        <>
         <div className="calendar-header sticky-header">
             <div className="header-top-row">
                 <div className="calendar-nav">
@@ -172,12 +173,10 @@ export function HeaderControls({
                         today
                     </button>
                     <span className="button-divider" aria-hidden="true" />
-                    <button className="nav-btn nav-new-event-btn" onClick={onOpenCreateEvent}>new item</button>
                     <button className="nav-btn nav-ai-create-btn" onClick={onOpenAiChat}>ai chat</button>
                     <button className="nav-btn" onClick={onSyncGoogleCalendar} disabled={isGoogleSyncing}>
                         {isGoogleSyncing ? 'syncing...' : 'sync google'}
                     </button>
-                    <button className="nav-btn nav-sos-btn" onClick={onOpenSosPlanner}>SOS</button>
                 </div>
 
                 <div className="calendar-title" ref={jumpToDateRef}>
@@ -285,5 +284,10 @@ export function HeaderControls({
                 </div>
             </div>
         </div>
+
+        <button className="sos-floating-btn" onClick={onOpenSosPlanner} aria-label="SOS Schedule Rescue">
+            SOS
+        </button>
+        </>
     );
 }

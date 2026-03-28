@@ -52,7 +52,7 @@ import {
     type CalendarTask,
 } from "./general_utils";
 import { SnackbarProvider, closeSnackbar, enqueueSnackbar } from 'notistack';
-import { AiChatModal, type AiChatRole, type AiChatThread, type AiTaskPreview, type AiThreadProgress } from "./ai_chat";
+import { AiChatSidebar, type AiChatRole, type AiChatThread, type AiTaskPreview, type AiThreadProgress } from "./ai_chat";
 import { TaskModal } from "./task_modal";
 import { TypeModal } from "./type_modal";
 import { HeaderControls } from "./header_controls";
@@ -68,7 +68,6 @@ import {
     requestServerShutdown as requestServerShutdownGateway,
 } from "./websocket_gateway";
 
-const MODAL_CLOSE_ANIMATION_MS = 180;
 const FILTER_REFRESH_ANIMATION_MS = 180;
 const AI_REQUEST_TIMEOUT_MS = 180000;
 const GOOGLE_SYNC_TYPE = 'google';
@@ -127,13 +126,10 @@ function MainCalendar() {
     const [isCreatingTask, setIsCreatingTask] = useState(false);
     const [creatingTaskDate, setCreatingTaskDate] = useState(new Date());
     const [isTypeModalOpen, setIsTypeModalOpen] = useState(false);
-    const [isTaskModalClosing, setIsTaskModalClosing] = useState(false);
-    const [isTypeModalClosing, setIsTypeModalClosing] = useState(false);
+
     const [isAiModalOpen, setIsAiModalOpen] = useState(false);
-    const [isAiModalClosing, setIsAiModalClosing] = useState(false);
     const [isAiSubmitting, setIsAiSubmitting] = useState(false);
     const [isSosModalOpen, setIsSosModalOpen] = useState(false);
-    const [isSosModalClosing, setIsSosModalClosing] = useState(false);
     const [sosPlannerDraft, setSosPlannerDraft] = useState<SosPlannerDraft>(() => buildDefaultSosPlannerDraft());
     const [aiChatInput, setAiChatInput] = useState('');
     const [aiThreads, setAiThreads] = useState<AiChatThread[]>(() => [createDefaultAiThread()]);
@@ -158,10 +154,7 @@ function MainCalendar() {
     const listScrollTargetRef = useRef<HTMLDivElement | null>(null);
     const dateTransitionTimerRef = useRef<number | null>(null);
     const viewTransitionTimerRef = useRef<number | null>(null);
-    const taskModalCloseTimerRef = useRef<number | null>(null);
-    const typeModalCloseTimerRef = useRef<number | null>(null);
-    const aiModalCloseTimerRef = useRef<number | null>(null);
-    const sosModalCloseTimerRef = useRef<number | null>(null);
+
     const filterRefreshTimerRef = useRef<number | null>(null);
     const filterRefreshRafRef = useRef<number | null>(null);
     const hasMountedFilterControlsRef = useRef(false);
@@ -629,33 +622,7 @@ function MainCalendar() {
         setViewTransition(null);
     };
 
-    const clearTaskModalCloseTimer = () => {
-        if (taskModalCloseTimerRef.current !== null) {
-            window.clearTimeout(taskModalCloseTimerRef.current);
-            taskModalCloseTimerRef.current = null;
-        }
-    };
 
-    const clearTypeModalCloseTimer = () => {
-        if (typeModalCloseTimerRef.current !== null) {
-            window.clearTimeout(typeModalCloseTimerRef.current);
-            typeModalCloseTimerRef.current = null;
-        }
-    };
-
-    const clearAiModalCloseTimer = () => {
-        if (aiModalCloseTimerRef.current !== null) {
-            window.clearTimeout(aiModalCloseTimerRef.current);
-            aiModalCloseTimerRef.current = null;
-        }
-    };
-
-    const clearSosModalCloseTimer = () => {
-        if (sosModalCloseTimerRef.current !== null) {
-            window.clearTimeout(sosModalCloseTimerRef.current);
-            sosModalCloseTimerRef.current = null;
-        }
-    };
 
     const clearFilterRefreshAnimation = () => {
         if (filterRefreshTimerRef.current !== null) {
@@ -776,10 +743,6 @@ function MainCalendar() {
             }
 
             cancelViewTransition();
-            clearTaskModalCloseTimer();
-            clearTypeModalCloseTimer();
-            clearAiModalCloseTimer();
-            clearSosModalCloseTimer();
             clearFilterRefreshAnimation();
             stopGoogleSyncProgressIndicators();
         };
@@ -1037,9 +1000,21 @@ function MainCalendar() {
         };
     }, [viewMode, dateTransition, viewTransition, tasks, filterType, filterKeyword, searchScope]);
 
+    const closePanelSidebars = () => {
+        setModalDraft(null);
+        setSelectedTaskId(null);
+        setIsCreatingTask(false);
+        setIsTypeModalOpen(false);
+        setIsGoogleCalendarPickerOpen(false);
+    };
+
+    const closeOverlaySidebars = () => {
+        setIsAiModalOpen(false);
+        setIsSosModalOpen(false);
+    };
+
     const openTaskModal = (task: CalendarTask) => {
-        clearTaskModalCloseTimer();
-        setIsTaskModalClosing(false);
+        closeOverlaySidebars();
         setIsCreatingTask(false);
         setSelectedTaskId(task.id);
         setModalDraft({
@@ -1068,8 +1043,7 @@ function MainCalendar() {
     };
 
     const openCreateTaskModal = (date: Date) => {
-        clearTaskModalCloseTimer();
-        setIsTaskModalClosing(false);
+        closeOverlaySidebars();
         const defaultType = taskTypes[0] ?? 'work';
         setIsCreatingTask(true);
         setSelectedTaskId(null);
@@ -1094,54 +1068,37 @@ function MainCalendar() {
     };
 
     const closeTypeModal = () => {
-        if (!isTypeModalOpen || isTypeModalClosing) {
-            return;
-        }
-
-        setIsTypeModalClosing(true);
-        clearTypeModalCloseTimer();
-        typeModalCloseTimerRef.current = window.setTimeout(() => {
-            setIsTypeModalOpen(false);
-            setIsTypeModalClosing(false);
-            resetTypeModalState();
-            typeModalCloseTimerRef.current = null;
-        }, MODAL_CLOSE_ANIMATION_MS);
+        setIsTypeModalOpen(false);
+        resetTypeModalState();
     };
 
     const closeTaskModal = () => {
-        if (!modalDraft || isTaskModalClosing) {
-            return;
-        }
-
         if (isTypeModalOpen) {
             closeTypeModal();
         }
-
-        setIsTaskModalClosing(true);
-        clearTaskModalCloseTimer();
-        taskModalCloseTimerRef.current = window.setTimeout(() => {
-            clearTypeModalCloseTimer();
-            setSelectedTaskId(null);
-            setIsCreatingTask(false);
-            setModalDraft(null);
-            setIsTaskModalClosing(false);
-            setIsTypeModalOpen(false);
-            setIsTypeModalClosing(false);
-            resetTypeModalState();
-            taskModalCloseTimerRef.current = null;
-        }, MODAL_CLOSE_ANIMATION_MS);
+        setSelectedTaskId(null);
+        setIsCreatingTask(false);
+        setModalDraft(null);
     };
 
     const openAiCreateModal = () => {
-        clearAiModalCloseTimer();
-        setIsAiModalClosing(false);
+        if (isAiModalOpen) {
+            closeAiCreateModal();
+            return;
+        }
+        closePanelSidebars();
+        setIsSosModalOpen(false);
         setIsAiModalOpen(true);
         setAiChatInput('');
     };
 
     const openSosPlannerModal = () => {
-        clearSosModalCloseTimer();
-        setIsSosModalClosing(false);
+        if (isSosModalOpen) {
+            setIsSosModalOpen(false);
+            return;
+        }
+        closePanelSidebars();
+        setIsAiModalOpen(false);
         setSosPlannerDraft(prev => ({
             userPrompt: prev.userPrompt.trim() ? prev.userPrompt : DEFAULT_SOS_USER_PROMPT,
         }));
@@ -1149,17 +1106,7 @@ function MainCalendar() {
     };
 
     const closeSosPlannerModal = () => {
-        if (!isSosModalOpen || isSosModalClosing) {
-            return;
-        }
-
-        setIsSosModalClosing(true);
-        clearSosModalCloseTimer();
-        sosModalCloseTimerRef.current = window.setTimeout(() => {
-            setIsSosModalOpen(false);
-            setIsSosModalClosing(false);
-            sosModalCloseTimerRef.current = null;
-        }, MODAL_CLOSE_ANIMATION_MS);
+        setIsSosModalOpen(false);
     };
 
     const sendAiRequest = (options: {
@@ -1261,8 +1208,6 @@ function MainCalendar() {
         setActiveAiThreadId(threadId);
         closeSosPlannerModal();
 
-        clearAiModalCloseTimer();
-        setIsAiModalClosing(false);
         setIsAiModalOpen(true);
         setAiChatInput('');
 
@@ -1278,7 +1223,7 @@ function MainCalendar() {
     };
 
     const closeAiCreateModal = () => {
-        if (!isAiModalOpen || isAiModalClosing) {
+        if (!isAiModalOpen) {
             return;
         }
 
@@ -1291,13 +1236,7 @@ function MainCalendar() {
             cancelActiveAiRequest('AI request canceled because the chat window was closed.');
         }
 
-        setIsAiModalClosing(true);
-        clearAiModalCloseTimer();
-        aiModalCloseTimerRef.current = window.setTimeout(() => {
-            setIsAiModalOpen(false);
-            setIsAiModalClosing(false);
-            aiModalCloseTimerRef.current = null;
-        }, MODAL_CLOSE_ANIMATION_MS);
+        setIsAiModalOpen(false);
     };
 
     const createNewAiThread = () => {
@@ -1320,6 +1259,25 @@ function MainCalendar() {
         setAiThreads(prev => [newThread, ...prev]);
         setActiveAiThreadId(threadId);
         setAiChatInput('');
+    };
+
+    const deleteAiThread = (threadId: string) => {
+        if (isAiSubmitting) {
+            enqueueSnackbar('Cannot delete a thread while AI is processing.', { variant: 'warning' });
+            return;
+        }
+        setAiThreads(prev => {
+            const remaining = prev.filter(t => t.id !== threadId);
+            if (remaining.length === 0) {
+                const fallback = createDefaultAiThread();
+                setActiveAiThreadId(fallback.id);
+                return [fallback];
+            }
+            if (threadId === activeAiThreadId) {
+                setActiveAiThreadId(remaining[0].id);
+            }
+            return remaining;
+        });
     };
 
     const handleAiChatInputChange = (value: string) => {
@@ -1350,8 +1308,6 @@ function MainCalendar() {
     };
 
     const openTypeCreateModal = () => {
-        clearTypeModalCloseTimer();
-        setIsTypeModalClosing(false);
         setTypeModalMode('create');
         setTypeEditingOriginalName(null);
         setTypeDraftName('');
@@ -1364,8 +1320,6 @@ function MainCalendar() {
             return;
         }
 
-        clearTypeModalCloseTimer();
-        setIsTypeModalClosing(false);
         const currentType = modalDraft.type;
         setTypeModalMode('edit');
         setTypeEditingOriginalName(currentType);
@@ -1620,6 +1574,7 @@ function MainCalendar() {
             setGoogleSyncSession(session);
             setGoogleCalendarOptions(session.calendars);
             setSelectedGoogleCalendarIds(session.calendars.map(calendar => calendar.id));
+            closeOverlaySidebars();
             setIsGoogleCalendarPickerOpen(true);
         } catch (error) {
             if (googleSyncTimedOutRef.current) {
@@ -1746,8 +1701,7 @@ function MainCalendar() {
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
     const activeAiThread = aiThreads.find(thread => thread.id === activeAiThreadId) ?? aiThreads[0] ?? null;
     const activeThreadProgress = aiThreadProgressById[activeAiThreadId] ?? null;
-    const shouldElevateTaskModal = Boolean(isAiModalOpen && modalDraft);
-    const shouldElevateTypeModal = Boolean(isAiModalOpen && isTypeModalOpen);
+
 
     useEffect(() => {
         if (!isAiModalOpen) {
@@ -1823,11 +1777,8 @@ function MainCalendar() {
                 </div>
             )}
 
-            {modalDraft && (
-                <TaskModal
+            <TaskModal
                     modalDraft={modalDraft}
-                    isTaskModalClosing={isTaskModalClosing}
-                    shouldElevateTaskModal={shouldElevateTaskModal}
                     isCreatingTask={isCreatingTask}
                     selectedTask={selectedTask}
                     creatingTaskDate={creatingTaskDate}
@@ -1840,12 +1791,9 @@ function MainCalendar() {
                     onSaveTask={saveTaskModal}
                     setModalDraft={setModalDraft}
                 />
-            )}
 
             <TypeModal
                 isOpen={isTypeModalOpen}
-                isClosing={isTypeModalClosing}
-                shouldElevate={shouldElevateTypeModal}
                 mode={typeModalMode}
                 editingOriginalName={typeEditingOriginalName}
                 draftName={typeDraftName}
@@ -1858,115 +1806,85 @@ function MainCalendar() {
                 setDraftColor={setTypeDraftColor}
             />
 
-            {isGoogleCalendarPickerOpen && (
-                <div
-                    className="task-modal-backdrop"
-                    onMouseDown={() => closeGoogleCalendarPicker()}
-                >
-                    <div
-                        className="task-modal google-calendar-picker-modal"
-                        onMouseDown={(event) => event.stopPropagation()}
-                    >
-                        <div className="task-modal-header">
-                            <h2>Select calendars to import</h2>
-                            <button
-                                type="button"
-                                className="task-modal-close"
-                                onClick={() => closeGoogleCalendarPicker()}
-                                aria-label="Close calendar picker"
-                            >
-                                x
-                            </button>
-                        </div>
+            <aside className={`panel-sidebar ${isGoogleCalendarPickerOpen ? 'open' : ''}`}>
+                <div className="panel-sidebar-header">
+                    <h2>Select calendars to import</h2>
+                    <button className="ai-sidebar-close" onClick={() => closeGoogleCalendarPicker()} aria-label="Close">✕</button>
+                </div>
 
-                        <p className="task-modal-meta">
-                            Selected {selectedGoogleCalendarIds.length} of {googleCalendarOptions.length} calendars.
-                        </p>
+                <div className="panel-sidebar-body">
+                    <p className="task-modal-meta">
+                        Selected {selectedGoogleCalendarIds.length} of {googleCalendarOptions.length} calendars.
+                    </p>
 
-                        <div className="google-calendar-picker-actions-row">
-                            <button
-                                type="button"
-                                className="task-modal-btn"
-                                onClick={() => setSelectedGoogleCalendarIds(googleCalendarOptions.map(calendar => calendar.id))}
-                            >
-                                Select all
-                            </button>
-                            <button
-                                type="button"
-                                className="task-modal-btn"
-                                onClick={() => setSelectedGoogleCalendarIds([])}
-                            >
-                                Clear all
-                            </button>
-                        </div>
+                    <div className="google-calendar-picker-actions-row">
+                        <button type="button" className="task-modal-btn" onClick={() => setSelectedGoogleCalendarIds(googleCalendarOptions.map(calendar => calendar.id))}>
+                            Select all
+                        </button>
+                        <button type="button" className="task-modal-btn" onClick={() => setSelectedGoogleCalendarIds([])}>
+                            Clear all
+                        </button>
+                    </div>
 
-                        <div className="google-calendar-picker-list" role="group" aria-label="Google calendars">
-                            {googleCalendarOptions.map(calendar => (
-                                <label key={calendar.id} className="google-calendar-picker-item">
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedGoogleCalendarIds.includes(calendar.id)}
-                                        onChange={() => toggleGoogleCalendarSelection(calendar.id)}
-                                    />
-                                    <span className="google-calendar-picker-name">{calendar.name}</span>
-                                </label>
-                            ))}
-                        </div>
+                    <div className="google-calendar-picker-list" role="group" aria-label="Google calendars">
+                        {googleCalendarOptions.map(calendar => (
+                            <label key={calendar.id} className="google-calendar-picker-item">
+                                <input
+                                    type="checkbox"
+                                    checked={selectedGoogleCalendarIds.includes(calendar.id)}
+                                    onChange={() => toggleGoogleCalendarSelection(calendar.id)}
+                                />
+                                <span className="google-calendar-picker-name">{calendar.name}</span>
+                            </label>
+                        ))}
+                    </div>
 
-                        <div className="task-modal-actions">
-                            <button
-                                type="button"
-                                className="task-modal-btn"
-                                onClick={() => closeGoogleCalendarPicker()}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                className="task-modal-btn primary"
-                                onClick={confirmGoogleCalendarImport}
-                                disabled={selectedGoogleCalendarIds.length === 0}
-                            >
-                                Import selected calendars
-                            </button>
-                        </div>
+                    <div className="panel-sidebar-actions">
+                        <button type="button" className="task-modal-btn" onClick={() => closeGoogleCalendarPicker()}>
+                            Cancel
+                        </button>
+                        <button
+                            type="button"
+                            className="task-modal-btn primary"
+                            onClick={confirmGoogleCalendarImport}
+                            disabled={selectedGoogleCalendarIds.length === 0}
+                        >
+                            Import selected calendars
+                        </button>
                     </div>
                 </div>
-            )}
+            </aside>
 
-            {isSosModalOpen && (
-                <div className={`task-modal-backdrop ${isSosModalClosing ? 'closing' : ''}`} onClick={closeSosPlannerModal}>
-                    <div className={`task-modal sos-planner-modal ${isSosModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
-                        <div className="task-modal-header">
-                            <h2>SOS Schedule Rescue</h2>
-                            <button className="task-modal-close" onClick={closeSosPlannerModal}>x</button>
-                        </div>
+            <aside className={`sos-sidebar ${isSosModalOpen ? 'open' : ''}`}>
+                    <div className="sos-sidebar-header">
+                        <h2>SOS Schedule Rescue</h2>
+                        <button className="ai-sidebar-close" onClick={closeSosPlannerModal} aria-label="Close SOS sidebar">✕</button>
+                    </div>
 
-                        <p className="task-modal-meta">
+                    <div className="sos-sidebar-body">
+                        <p className="sos-sidebar-description">
                             Enter one sentence to tell AI how to auto-plan your schedule. You can also run with the default prompt.
                         </p>
 
                         <label className="task-modal-label" htmlFor="sos-user-prompt">One-line request (optional)</label>
                         <textarea
                             id="sos-user-prompt"
-                            className="task-modal-textarea"
+                            className="task-modal-textarea sos-sidebar-textarea"
                             value={sosPlannerDraft.userPrompt}
                             placeholder={DEFAULT_SOS_USER_PROMPT}
                             onChange={(event) => setSosPlannerDraft(prev => ({ ...prev, userPrompt: event.target.value }))}
                             disabled={isAiSubmitting}
                         />
 
-                        <div className="task-modal-actions">
+                        <div className="sos-sidebar-actions">
                             <button className="task-modal-btn" onClick={closeSosPlannerModal} disabled={isAiSubmitting}>Cancel</button>
                             <button className="task-modal-btn primary" onClick={runSosPlanner} disabled={isAiSubmitting}>Run SOS Plan</button>
                         </div>
                     </div>
-                </div>
-            )}
+                </aside>
 
-            <AiChatModal
+            <AiChatSidebar
                 isOpen={isAiModalOpen}
-                isClosing={isAiModalClosing}
                 isSubmitting={isAiSubmitting}
                 aiThreads={aiThreads}
                 activeAiThreadId={activeAiThreadId}
@@ -1974,8 +1892,9 @@ function MainCalendar() {
                 activeThreadProgress={activeThreadProgress}
                 aiChatInput={aiChatInput}
                 aiMessagesEndRef={aiMessagesEndRef}
-                onBackdropClose={closeAiCreateModal}
+                onClose={closeAiCreateModal}
                 onCreateThread={createNewAiThread}
+                onDeleteThread={deleteAiThread}
                 onSwitchThread={setActiveAiThreadId}
                 onInputChange={handleAiChatInputChange}
                 onSendMessage={handleSendAiChatMessage}
