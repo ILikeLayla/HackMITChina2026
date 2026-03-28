@@ -851,6 +851,10 @@ body {
   animation: modal-backdrop-fade-in 180ms ease-out;
 }
 
+.task-modal-backdrop.modal-over-ai {
+  z-index: 130;
+}
+
 .task-modal-backdrop.closing {
   animation: modal-backdrop-fade-out 180ms ease-in forwards;
 }
@@ -1099,10 +1103,63 @@ body {
 }
 
 .ai-chat-message-text {
-  white-space: pre-wrap;
   word-break: break-word;
   font-size: 14px;
   line-height: 1.45;
+}
+
+.ai-chat-message-text > :first-child {
+  margin-top: 0;
+}
+
+.ai-chat-message-text > :last-child {
+  margin-bottom: 0;
+}
+
+.ai-chat-message-text p,
+.ai-chat-message-text ul,
+.ai-chat-message-text ol,
+.ai-chat-message-text pre,
+.ai-chat-message-text blockquote {
+  margin: 0.5em 0;
+}
+
+.ai-chat-message-text ul,
+.ai-chat-message-text ol {
+  padding-left: 1.4em;
+}
+
+.ai-chat-message-text code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.92em;
+  background: rgba(57, 108, 216, 0.1);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+
+.ai-chat-message-text pre {
+  background: #f3f6fb;
+  border: 1px solid #dce3f2;
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+}
+
+.ai-chat-message-text pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.ai-chat-message-text blockquote {
+  border-left: 3px solid #b9c8e9;
+  padding-left: 10px;
+  color: #4c5d78;
+}
+
+.ai-chat-message-text a {
+  color: #1f5dd4;
+  text-decoration: underline;
 }
 
 .ai-task-preview {
@@ -1124,6 +1181,18 @@ body {
   margin-right: auto;
   background: #fff6e8;
   border-color: #f3dfbc;
+}
+
+.ai-chat-message-task-cards {
+  background: #eaf7f3;
+  border-color: #b9e4d6;
+}
+
+.ai-task-cards-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .ai-chat-processing {
@@ -1465,6 +1534,11 @@ body {
   .ai-chat-message-system {
     background: #45382a;
     border-color: #745d40;
+  }
+
+  .ai-chat-message-task-cards {
+    background: #1f3b33;
+    border-color: #356355;
   }
 
   .task-modal-btn.danger {

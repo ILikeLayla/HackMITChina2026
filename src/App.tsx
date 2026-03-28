@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -76,6 +78,7 @@ type AiChatMessage = {
     text: string;
     createdAt: number;
     taskPreview?: AiTaskPreview;
+    taskCards?: AiTaskPreview[];
 };
 
 type AiChatThread = {
@@ -229,7 +232,7 @@ function MainCalendar() {
         threadId: string,
         role: AiChatRole,
         text: string,
-        options?: { taskPreview?: AiTaskPreview },
+        options?: { taskPreview?: AiTaskPreview; taskCards?: AiTaskPreview[] },
     ) => {
         const createdAt = Date.now();
         setAiThreads(prev => prev.map(thread => (
@@ -244,6 +247,7 @@ function MainCalendar() {
                             text,
                             createdAt,
                             ...(options?.taskPreview ? { taskPreview: options.taskPreview } : {}),
+                            ...(options?.taskCards ? { taskCards: options.taskCards } : {}),
                         },
                     ],
                     updatedAt: createdAt,
@@ -729,6 +733,12 @@ function MainCalendar() {
                         [taskType]: color,
                     }));
 
+                    appendMessageToThread(
+                        pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,
+                        'system',
+                        `AI updated type color: ${taskType} -> ${color}`,
+                    );
+
                     ws.current?.send(`update_task_type_color_result: ${JSON.stringify({
                         request_id: payload.request_id,
                         ok: true,
@@ -737,6 +747,179 @@ function MainCalendar() {
                     })}`);
                 } catch (error) {
                     console.error('Failed to parse update_task_type_color payload:', error);
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('rename_task_type: ')) {
+                const payloadText = event.data.substring('rename_task_type: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as {
+                        request_id?: string;
+                        old_task_type?: string;
+                        new_task_type?: string;
+                        new_color?: string;
+                    };
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    const oldType = (payload.old_task_type ?? '').trim().toLowerCase();
+                    const newType = (payload.new_task_type ?? '').trim().toLowerCase();
+                    const newColor = (payload.new_color ?? '').trim();
+
+                    if (!oldType || !newType) {
+                        ws.current?.send(`rename_task_type_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: 'Both old_task_type and new_task_type are required.',
+                        })}`);
+                        return;
+                    }
+
+                    if (!taskTypesRef.current.includes(oldType)) {
+                        ws.current?.send(`rename_task_type_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: `Type ${oldType} does not exist.`,
+                        })}`);
+                        return;
+                    }
+
+                    if (oldType !== newType && taskTypesRef.current.includes(newType)) {
+                        ws.current?.send(`rename_task_type_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: `Type ${newType} already exists.`,
+                        })}`);
+                        return;
+                    }
+
+                    const movedCount = tasksRef.current.filter(task => task.type === oldType).length;
+
+                    setTaskTypes(prev => prev.map(type => (type === oldType ? newType : type)));
+                    setTaskTypeColors(prev => {
+                        const next = { ...prev };
+                        const previousColor = next[oldType] ?? defaultTypeColors[OTHER_TYPE];
+                        delete next[oldType];
+                        next[newType] = isValidHexColor(newColor) ? newColor : previousColor;
+                        return next;
+                    });
+                    setTasks(prev => prev.map(task => (
+                        task.type === oldType
+                            ? { ...task, type: newType }
+                            : task
+                    )));
+                    setModalDraft(prev => (
+                        prev && prev.type === oldType
+                            ? { ...prev, type: newType }
+                            : prev
+                    ));
+                    setFilterType(prev => (prev === oldType ? newType : prev));
+
+                    appendMessageToThread(
+                        pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,
+                        'system',
+                        `AI renamed type ${oldType} to ${newType}. Moved ${movedCount} task(s).`,
+                    );
+
+                    ws.current?.send(`rename_task_type_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        old_task_type: oldType,
+                        new_task_type: newType,
+                        moved_count: movedCount,
+                        color: isValidHexColor(newColor)
+                            ? newColor
+                            : (taskTypeColorsRef.current[oldType] ?? defaultTypeColors[OTHER_TYPE]),
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse rename_task_type payload:', error);
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('delete_task_type: ')) {
+                const payloadText = event.data.substring('delete_task_type: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as {
+                        request_id?: string;
+                        task_type?: string;
+                        move_to_type?: string;
+                    };
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    const targetType = (payload.task_type ?? '').trim().toLowerCase();
+                    const moveToType = (payload.move_to_type ?? OTHER_TYPE).trim().toLowerCase() || OTHER_TYPE;
+
+                    if (!targetType) {
+                        ws.current?.send(`delete_task_type_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: 'task_type is required.',
+                        })}`);
+                        return;
+                    }
+
+                    if (targetType === OTHER_TYPE) {
+                        ws.current?.send(`delete_task_type_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: `Type ${OTHER_TYPE} cannot be deleted.`,
+                        })}`);
+                        return;
+                    }
+
+                    if (!taskTypesRef.current.includes(targetType)) {
+                        ws.current?.send(`delete_task_type_result: ${JSON.stringify({
+                            request_id: payload.request_id,
+                            ok: false,
+                            message: `Type ${targetType} does not exist.`,
+                        })}`);
+                        return;
+                    }
+
+                    const movedCount = tasksRef.current.filter(task => task.type === targetType).length;
+
+                    setTaskTypes(prev => {
+                        const withoutDeleted = prev.filter(type => type !== targetType);
+                        return withoutDeleted.includes(moveToType)
+                            ? withoutDeleted
+                            : [...withoutDeleted, moveToType];
+                    });
+                    setTaskTypeColors(prev => {
+                        const next = { ...prev };
+                        delete next[targetType];
+                        next[moveToType] = next[moveToType] ?? defaultTypeColors[OTHER_TYPE];
+                        return next;
+                    });
+                    setTasks(prev => prev.map(task => (
+                        task.type === targetType
+                            ? { ...task, type: moveToType }
+                            : task
+                    )));
+                    setModalDraft(prev => (
+                        prev && prev.type === targetType
+                            ? { ...prev, type: moveToType }
+                            : prev
+                    ));
+                    setFilterType(prev => (prev === targetType ? moveToType : prev));
+
+                    appendMessageToThread(
+                        pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,
+                        'system',
+                        `AI deleted type ${targetType}. Moved ${movedCount} task(s) to ${moveToType}.`,
+                    );
+
+                    ws.current?.send(`delete_task_type_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        task_type: targetType,
+                        move_to_type: moveToType,
+                        moved_count: movedCount,
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse delete_task_type payload:', error);
                 }
             }
 
@@ -755,6 +938,78 @@ function MainCalendar() {
                     })}`);
                 } catch (error) {
                     console.error('Failed to parse get_task_type_colors payload:', error);
+                }
+            }
+
+            if (typeof event.data === 'string' && event.data.startsWith('show_task_cards: ')) {
+                const payloadText = event.data.substring('show_task_cards: '.length);
+                try {
+                    const payload = JSON.parse(payloadText) as {
+                        request_id?: string;
+                        task_ids?: Array<number | string> | string;
+                        task_type?: string;
+                        date?: string;
+                        limit?: number;
+                        intro?: string;
+                    };
+                    if (!payload.request_id) {
+                        return;
+                    }
+
+                    let candidates = [...tasksRef.current];
+
+                    const idsRaw = payload.task_ids;
+                    const parsedIds = Array.isArray(idsRaw)
+                        ? idsRaw
+                        : typeof idsRaw === 'string'
+                            ? idsRaw.split(',').map(token => token.trim()).filter(Boolean)
+                            : [];
+
+                    if (parsedIds.length > 0) {
+                        const idSet = new Set(
+                            parsedIds
+                                .map(id => Number(id))
+                                .filter(id => Number.isFinite(id)),
+                        );
+                        candidates = candidates.filter(task => idSet.has(task.id));
+                    }
+
+                    const typeFilter = (payload.task_type ?? '').trim().toLowerCase();
+                    if (typeFilter) {
+                        candidates = candidates.filter(task => task.type === typeFilter);
+                    }
+
+                    const dateFilter = (payload.date ?? '').trim();
+                    if (dateFilter) {
+                        candidates = candidates.filter(task => task.date === dateFilter);
+                    }
+
+                    const limit = Math.max(1, Math.min(12, Number(payload.limit) || 6));
+                    const selected = candidates.slice(0, limit);
+
+                    const taskCards: AiTaskPreview[] = selected.map(task => ({
+                        id: task.id,
+                        title: task.title,
+                        date: task.date,
+                        time: task.time,
+                        type: task.type,
+                        note: task.note,
+                    }));
+
+                    appendMessageToThread(
+                        pendingAiRequestThreadIdRef.current ?? activeAiThreadIdRef.current,
+                        'assistant',
+                        (payload.intro ?? '').trim() || 'Here are some related tasks:',
+                        { taskCards },
+                    );
+
+                    ws.current?.send(`show_task_cards_result: ${JSON.stringify({
+                        request_id: payload.request_id,
+                        ok: true,
+                        count: taskCards.length,
+                    })}`);
+                } catch (error) {
+                    console.error('Failed to parse show_task_cards payload:', error);
                 }
             }
         };
@@ -1248,6 +1503,17 @@ function MainCalendar() {
         });
     };
 
+    const openTaskModalFromPreview = (preview: AiTaskPreview) => {
+        openTaskModal({
+            id: preview.id,
+            title: preview.title,
+            date: preview.date,
+            time: preview.time,
+            type: preview.type,
+            note: preview.note,
+        });
+    };
+
     const openCreateTaskModal = (date: Date) => {
         clearTaskModalCloseTimer();
         setIsTaskModalClosing(false);
@@ -1600,6 +1866,8 @@ function MainCalendar() {
     const effectiveViewMode: ViewMode = viewTransition?.toMode ?? viewMode;
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
     const activeAiThread = aiThreads.find(thread => thread.id === activeAiThreadId) ?? aiThreads[0] ?? null;
+    const shouldElevateTaskModal = Boolean(isAiModalOpen && modalDraft);
+    const shouldElevateTypeModal = Boolean(isAiModalOpen && isTypeModalOpen);
 
     useEffect(() => {
         if (!isAiModalOpen) {
@@ -1724,7 +1992,10 @@ function MainCalendar() {
             )}
 
             {modalDraft && (
-                <div className={`task-modal-backdrop ${isTaskModalClosing ? 'closing' : ''}`} onClick={closeTaskModal}>
+                <div
+                    className={`task-modal-backdrop ${isTaskModalClosing ? 'closing' : ''} ${shouldElevateTaskModal ? 'modal-over-ai' : ''}`}
+                    onClick={closeTaskModal}
+                >
                     <div className={`task-modal ${isTaskModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
                         <div className="task-modal-header">
                             <h2>{isCreatingTask ? 'Create Event' : 'Edit Event'}</h2>
@@ -1808,7 +2079,10 @@ function MainCalendar() {
             )}
 
             {isTypeModalOpen && (
-                <div className={`task-modal-backdrop ${isTypeModalClosing ? 'closing' : ''}`} onClick={closeTypeModal}>
+                <div
+                    className={`task-modal-backdrop ${isTypeModalClosing ? 'closing' : ''} ${shouldElevateTypeModal ? 'modal-over-ai' : ''}`}
+                    onClick={closeTypeModal}
+                >
                     <div className={`task-modal type-create-modal ${isTypeModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
                         <div className="task-modal-header">
                             <h2>{typeModalMode === 'edit' ? 'Edit Type' : 'Create Type'}</h2>
@@ -1893,9 +2167,16 @@ function MainCalendar() {
                             <div className="ai-chat-main">
                                 <div className="ai-chat-messages" aria-live="polite">
                                     {activeAiThread?.messages.map(message => (
-                                        <div key={message.id} className={`ai-chat-message ai-chat-message-${message.role}`}>
+                                        <div
+                                            key={message.id}
+                                            className={`ai-chat-message ai-chat-message-${message.role}${message.taskCards?.length ? ' ai-chat-message-task-cards' : ''}`}
+                                        >
                                             <div className="ai-chat-message-role">{message.role}</div>
-                                            <div className="ai-chat-message-text">{message.text}</div>
+                                            <div className="ai-chat-message-text">
+                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                    {message.text}
+                                                </ReactMarkdown>
+                                            </div>
                                             {message.taskPreview && (
                                                 <div className="ai-task-preview">
                                                     <div
@@ -1903,25 +2184,11 @@ function MainCalendar() {
                                                         style={getTaskStyle(message.taskPreview.type)}
                                                         role="button"
                                                         tabIndex={0}
-                                                        onClick={() => openTaskModal({
-                                                            id: message.taskPreview!.id,
-                                                            title: message.taskPreview!.title,
-                                                            date: message.taskPreview!.date,
-                                                            time: message.taskPreview!.time,
-                                                            type: message.taskPreview!.type,
-                                                            note: message.taskPreview!.note,
-                                                        })}
+                                                        onClick={() => openTaskModalFromPreview(message.taskPreview!)}
                                                         onKeyDown={(event) => {
                                                             if (event.key === 'Enter' || event.key === ' ') {
                                                                 event.preventDefault();
-                                                                openTaskModal({
-                                                                    id: message.taskPreview!.id,
-                                                                    title: message.taskPreview!.title,
-                                                                    date: message.taskPreview!.date,
-                                                                    time: message.taskPreview!.time,
-                                                                    type: message.taskPreview!.type,
-                                                                    note: message.taskPreview!.note,
-                                                                });
+                                                                openTaskModalFromPreview(message.taskPreview!);
                                                             }
                                                         }}
                                                     >
@@ -1934,6 +2201,35 @@ function MainCalendar() {
                                                             {`${message.taskPreview.date} | ${message.taskPreview.type} | #${message.taskPreview.id}`}
                                                         </div>
                                                     </div>
+                                                </div>
+                                            )}
+                                            {message.taskCards && message.taskCards.length > 0 && (
+                                                <div className="ai-task-cards-list">
+                                                    {message.taskCards.map(taskCard => (
+                                                        <div
+                                                            key={`${message.id}-${taskCard.id}`}
+                                                            className="list-card-task clickable-task"
+                                                            style={getTaskStyle(taskCard.type)}
+                                                            role="button"
+                                                            tabIndex={0}
+                                                            onClick={() => openTaskModalFromPreview(taskCard)}
+                                                            onKeyDown={(event) => {
+                                                                if (event.key === 'Enter' || event.key === ' ') {
+                                                                    event.preventDefault();
+                                                                    openTaskModalFromPreview(taskCard);
+                                                                }
+                                                            }}
+                                                        >
+                                                            <div className="list-card-task-main">
+                                                                <span className="task-time">{taskCard.time || '--:--'}</span>
+                                                                <span className="task-divider" aria-hidden="true" />
+                                                                {taskCard.title || '(untitled task)'}
+                                                            </div>
+                                                            <div className="list-card-task-note">
+                                                                {`${taskCard.date} | ${taskCard.type} | #${taskCard.id}`}
+                                                            </div>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             )}
                                         </div>

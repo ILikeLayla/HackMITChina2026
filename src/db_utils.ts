@@ -19,9 +19,6 @@ export const seedTasks: CalendarTask[] = [
 ];
 
 export const defaultTypeColors: Record<string, string> = {
-    work: '#d6ecff',
-    personal: '#d9f3df',
-    important: '#ffe0e0',
     other: '#b8b8b8',
 };
 
@@ -65,7 +62,7 @@ export function saveTaskTypeColorsToTempDb(typeColors: Record<string, string>) {
 }
 
 export function loadTaskTypesFromTempDb(): string[] {
-    const seedTypes = ['work', 'personal', 'important'];
+    const seedTypes = ['other'];
 
     if (typeof window === 'undefined') {
         return seedTypes;

@@ -235,6 +235,58 @@ async def update_task_type_color(taskType: str, color: str):
 
 
 @tool
+async def rename_task_type(old_task_type: str, new_task_type: str, new_color: str = ""):
+    """Renames a task type and optionally sets a new color."""
+    logger.info(
+        "rename_task_type called with old_task_type=%s new_task_type=%s",
+        old_task_type,
+        new_task_type,
+    )
+
+    result_payload = await send_frontend_request(
+        "rename_task_type",
+        {
+            "old_task_type": old_task_type,
+            "new_task_type": new_task_type,
+            "new_color": new_color,
+        },
+        timeout_seconds=15,
+    )
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to rename type: {message}"
+
+    return (
+        "Type renamed successfully: "
+        f"{result_payload.get('old_task_type')} -> {result_payload.get('new_task_type')}, "
+        f"moved {result_payload.get('moved_count')} task(s)."
+    )
+
+
+@tool
+async def delete_task_type(task_type: str, move_to_type: str = "other"):
+    """Deletes a task type and moves affected tasks to another type."""
+    logger.info("delete_task_type called with task_type=%s move_to_type=%s", task_type, move_to_type)
+
+    result_payload = await send_frontend_request(
+        "delete_task_type",
+        {
+            "task_type": task_type,
+            "move_to_type": move_to_type,
+        },
+        timeout_seconds=15,
+    )
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to delete type: {message}"
+
+    return (
+        f"Type {result_payload.get('task_type')} deleted. "
+        f"Moved {result_payload.get('moved_count')} task(s) to {result_payload.get('move_to_type')}."
+    )
+
+
+@tool
 async def get_all_task_type_colors():
     """Returns all task type colors as a mapping of type name to hex color."""
     logger.info("get_all_task_type_colors called")
@@ -245,6 +297,49 @@ async def get_all_task_type_colors():
         return f"Failed to get task type colors: {message}"
 
     return result_payload.get("colors", {})
+
+
+@tool
+async def show_task_cards(
+    task_ids: str = "",
+    task_type: str = "",
+    date: str = "",
+    limit: int = 6,
+    intro: str = "",
+):
+    """Ask the frontend to render a task-card message in chat.
+
+    Args:
+        task_ids: Optional comma-separated task ids, e.g. "1,2,8".
+        task_type: Optional task type filter.
+        date: Optional date filter in YYYY-MM-DD.
+        limit: Maximum number of cards to show (1-12).
+        intro: Optional message shown above the cards.
+    """
+    logger.info(
+        "show_task_cards called with task_ids=%s task_type=%s date=%s limit=%s",
+        task_ids,
+        task_type,
+        date,
+        limit,
+    )
+
+    result_payload = await send_frontend_request(
+        "show_task_cards",
+        {
+            "task_ids": task_ids,
+            "task_type": task_type,
+            "date": date,
+            "limit": limit,
+            "intro": intro,
+        },
+        timeout_seconds=15,
+    )
+    if not result_payload.get("ok", False):
+        message = result_payload.get("message", "Unknown error")
+        return f"Failed to show task cards: {message}"
+
+    return f"Displayed {result_payload.get('count', 0)} task card(s) in chat."
     
 @tool
 def get_time_now():
@@ -265,7 +360,10 @@ task_creation_agent = create_agent(
         update_calendar_task,
         delete_calendar_task,
         update_task_type_color,
+        rename_task_type,
+        delete_task_type,
         get_all_task_type_colors,
+        show_task_cards,
         get_time_now,
     ],
     checkpointer=InMemorySaver(),
@@ -295,7 +393,7 @@ task_creation_agent = create_agent(
 async def calendar_agent(user_message, current_thread_id):
     logger.info("calendar_agent called with user message: %s", user_message)
 
-    system_prompt = f"You are a helpful assistant that lives in a calendar application. You will answer user questions related to their calendar and create calendar tasks based on user requests. Here is the user message: {user_message}"
+    system_prompt = f"You are a helpful assistant that lives in a calendar application. You will answer user questions related to their calendar and create calendar tasks based on user requests. Please use existing task type as much as possible, if not, note to check if the type color of the newly created task is appropriate after creation. When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks)."
 
     initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
     logger.info("Invoking calendar agent")
@@ -435,6 +533,45 @@ async def listen(websocket):
                         waiter.set_result(result_payload)
                 except json.JSONDecodeError:
                     logger.error("Failed to decode task_type_colors_result JSON: %s", result_json)
+            if message.startswith("rename_task_type_result: "):
+                result_json = message[len("rename_task_type_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("rename_task_type_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode rename_task_type_result JSON: %s", result_json)
+            if message.startswith("delete_task_type_result: "):
+                result_json = message[len("delete_task_type_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("delete_task_type_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode delete_task_type_result JSON: %s", result_json)
+            if message.startswith("show_task_cards_result: "):
+                result_json = message[len("show_task_cards_result: "):]
+                try:
+                    result_payload = json.loads(result_json)
+                    request_id = result_payload.get("request_id")
+                    if not request_id:
+                        logger.warning("show_task_cards_result missing request_id")
+                        continue
+                    waiter = calendar_query_results.get(request_id)
+                    if waiter and not waiter.done():
+                        waiter.set_result(result_payload)
+                except json.JSONDecodeError:
+                    logger.error("Failed to decode show_task_cards_result JSON: %s", result_json)
     finally:
         for task in background_tasks:
             task.cancel()
