@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { getFirstUpcomingTaskKey, type CalendarTask } from "../general_utils";
+import { getFirstUpcomingTaskKey, getTaskDisplayTime, type CalendarTask } from "../general_utils";
 
 type TaskStyleResolver = (type: string) => React.CSSProperties;
 type TaskOpener = (task: CalendarTask) => void;
@@ -53,7 +53,7 @@ export function ListView({
                                         style={getTaskStyle(task.type)}
                                         onClick={() => openTaskModal(task)}
                                     >
-                                        <div className="list-card-task-main">{task.time}<div className="task-divider" aria-hidden="true"></div>{task.title}</div>
+                                        <div className="list-card-task-main">{getTaskDisplayTime(task)}<div className="task-divider" aria-hidden="true"></div>{task.title}</div>
                                         <div className="list-card-task-note">{task.note || 'No note'}</div>
                                     </div>
                                 ))}
@@ -62,7 +62,7 @@ export function ListView({
                     );
                 })
             ) : (
-                <div className="list-view-empty">No tasks available</div>
+                <div className="list-view-empty">No items available</div>
             )}
         </div>
     );

@@ -7,7 +7,10 @@ export type AiTaskPreview = {
     id: number;
     title: string;
     date: string;
-    time: string;
+    itemKind: 'task' | 'event';
+    ddl: string;
+    startTime: string;
+    endTime: string;
     type: string;
     note: string;
 };
@@ -66,6 +69,13 @@ export function AiChatModal({
     openTaskModalFromPreview,
     getTaskStyle,
 }: AiChatModalProps) {
+    const getPreviewTimeText = (task: AiTaskPreview) => {
+        if (task.itemKind === 'event') {
+            return `${task.startTime || '--:--'} - ${task.endTime || '--:--'}`;
+        }
+        return `DDL ${task.ddl || '--:--'}`;
+    };
+
     if (!isOpen) {
         return null;
     }
@@ -132,12 +142,12 @@ export function AiChatModal({
                                                 }}
                                             >
                                                 <div className="list-card-task-main">
-                                                    <span className="task-time">{message.taskPreview.time || '--:--'}</span>
+                                                    <span className="task-time">{getPreviewTimeText(message.taskPreview)}</span>
                                                     <span className="task-divider" aria-hidden="true" />
                                                     {message.taskPreview.title || '(untitled task)'}
                                                 </div>
                                                 <div className="list-card-task-note">
-                                                    {`${message.taskPreview.date} | ${message.taskPreview.type} | #${message.taskPreview.id}`}
+                                                    {`${message.taskPreview.date} | ${message.taskPreview.itemKind} | ${message.taskPreview.type} | #${message.taskPreview.id}`}
                                                 </div>
                                             </div>
                                         </div>
@@ -160,12 +170,12 @@ export function AiChatModal({
                                                     }}
                                                 >
                                                     <div className="list-card-task-main">
-                                                        <span className="task-time">{taskCard.time || '--:--'}</span>
+                                                        <span className="task-time">{getPreviewTimeText(taskCard)}</span>
                                                         <span className="task-divider" aria-hidden="true" />
                                                         {taskCard.title || '(untitled task)'}
                                                     </div>
                                                     <div className="list-card-task-note">
-                                                        {`${taskCard.date} | ${taskCard.type} | #${taskCard.id}`}
+                                                        {`${taskCard.date} | ${taskCard.itemKind} | ${taskCard.type} | #${taskCard.id}`}
                                                     </div>
                                                 </div>
                                             ))}

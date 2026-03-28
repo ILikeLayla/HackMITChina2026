@@ -72,7 +72,7 @@ export function HeaderControls({
                         today
                     </button>
                     <span className="button-divider" aria-hidden="true" />
-                    <button className="nav-btn nav-new-event-btn" onClick={onOpenCreateEvent}>new event</button>
+                    <button className="nav-btn nav-new-event-btn" onClick={onOpenCreateEvent}>new item</button>
                     <button className="nav-btn nav-ai-create-btn" onClick={onOpenAiChat}>ai chat</button>
                     <button className="nav-btn" onClick={onSyncGoogleCalendar} disabled={isGoogleSyncing}>
                         {isGoogleSyncing ? 'syncing...' : 'sync google'}

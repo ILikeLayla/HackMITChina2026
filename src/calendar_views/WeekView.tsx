@@ -1,4 +1,4 @@
-import type { CalendarDay, CalendarTask } from "../general_utils";
+import { getTaskDisplayTime, type CalendarDay, type CalendarTask } from "../general_utils";
 
 type DayTaskQuery = (day: CalendarDay) => CalendarTask[];
 type TaskStyleResolver = (type: string) => React.CSSProperties;
@@ -45,13 +45,19 @@ export function WeekView({
                                                 key={task.id}
                                                 className={`task clickable-task ${task.type}`}
                                                 style={getTaskStyle(task.type)}
-                                                title={`${task.title} ${task.time}`}
+                                                title={`${task.title} ${getTaskDisplayTime(task)}`}
                                                 onClick={(event) => {
                                                     event.stopPropagation();
                                                     openTaskModal(task);
                                                 }}
                                             >
-                                                <p className="task-time">{task.time}</p><div className="task-divider" aria-hidden="true"></div>{task.title}
+                                                <div className="task-meta-line">
+                                                    <p className="task-time">{getTaskDisplayTime(task)}</p>
+                                                    <span className={`task-kind-badge ${task.itemKind}`}>
+                                                        {task.itemKind === 'event' ? 'EVT' : 'TSK'}
+                                                    </span>
+                                                </div>
+                                                <div className="task-title-line">{task.title}</div>
                                             </div>
                                         ))}
                                     </div>

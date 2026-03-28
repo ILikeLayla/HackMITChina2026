@@ -1,4 +1,4 @@
-import type { CalendarDay, CalendarTask } from "../general_utils";
+import { getTaskDisplayTime, type CalendarDay, type CalendarTask } from "../general_utils";
 
 type DayTaskQuery = (day: CalendarDay) => CalendarTask[];
 type TaskStyleResolver = (type: string) => React.CSSProperties;
@@ -49,12 +49,12 @@ export function DayView({
                                 style={getTaskStyle(task.type)}
                                 onClick={() => openTaskModal(task)}
                             >
-                                <div className="day-view-task-main">{task.time}<div className="task-divider" aria-hidden="true"></div>{task.title}</div>
+                                <div className="day-view-task-main">{getTaskDisplayTime(task)}<div className="task-divider" aria-hidden="true"></div>{task.title}</div>
                                 <div className="day-view-task-note">{task.note || 'No note'}</div>
                             </div>
                         ))
                     ) : (
-                        <div className="day-view-empty">No tasks scheduled</div>
+                        <div className="day-view-empty">No items scheduled</div>
                     )}
                 </div>
             </div>

@@ -45,7 +45,7 @@ export function TaskModal({
         >
             <div className={`task-modal ${isTaskModalClosing ? 'closing' : ''}`} onClick={(event) => event.stopPropagation()}>
                 <div className="task-modal-header">
-                    <h2>{isCreatingTask ? 'Create Event' : 'Edit Event'}</h2>
+                    <h2>{isCreatingTask ? 'Create Item' : 'Edit Item'}</h2>
                     <button className="task-modal-close" onClick={onClose}>x</button>
                 </div>
                 {!isCreatingTask && selectedTask && (
@@ -77,13 +77,54 @@ export function TaskModal({
                     onChange={(event) => setModalDraft(prev => prev ? { ...prev, title: event.target.value } : prev)}
                 />
 
-                <label className="task-modal-label">Time</label>
-                <input
+                <label className="task-modal-label">Kind</label>
+                <select
                     className="task-modal-input"
-                    type="time"
-                    value={modalDraft.time}
-                    onChange={(event) => setModalDraft(prev => prev ? { ...prev, time: event.target.value } : prev)}
-                />
+                    value={modalDraft.itemKind}
+                    onChange={(event) => {
+                        const nextKind = event.target.value as 'task' | 'event';
+                        setModalDraft(prev => prev ? {
+                            ...prev,
+                            itemKind: nextKind,
+                            ddl: nextKind === 'task' ? (prev.ddl || '09:00') : '',
+                            startTime: nextKind === 'event' ? (prev.startTime || '09:00') : '',
+                            endTime: nextKind === 'event' ? (prev.endTime || '10:00') : '',
+                        } : prev);
+                    }}
+                >
+                    <option value="task">task</option>
+                    <option value="event">event</option>
+                </select>
+
+                {modalDraft.itemKind === 'task' ? (
+                    <>
+                        <label className="task-modal-label">DDL</label>
+                        <input
+                            className="task-modal-input"
+                            type="time"
+                            value={modalDraft.ddl}
+                            onChange={(event) => setModalDraft(prev => prev ? { ...prev, ddl: event.target.value } : prev)}
+                        />
+                    </>
+                ) : (
+                    <>
+                        <label className="task-modal-label">Start Time</label>
+                        <input
+                            className="task-modal-input"
+                            type="time"
+                            value={modalDraft.startTime}
+                            onChange={(event) => setModalDraft(prev => prev ? { ...prev, startTime: event.target.value } : prev)}
+                        />
+
+                        <label className="task-modal-label">End Time</label>
+                        <input
+                            className="task-modal-input"
+                            type="time"
+                            value={modalDraft.endTime}
+                            onChange={(event) => setModalDraft(prev => prev ? { ...prev, endTime: event.target.value } : prev)}
+                        />
+                    </>
+                )}
 
                 <label className="task-modal-label">Type</label>
                 <div className="type-select-row">

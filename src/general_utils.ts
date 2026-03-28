@@ -1,11 +1,15 @@
 export type TaskType = string;
+export type CalendarItemKind = 'task' | 'event';
 
 export interface CalendarTask {
     id: number;
     title: string;
     date: string;
     type: TaskType;
-    time: string;
+    itemKind: CalendarItemKind;
+    ddl: string;
+    startTime: string;
+    endTime: string;
     note: string;
 }
 
@@ -19,6 +23,19 @@ export interface CalendarDay {
 
 export function parseTaskDate(dateStr: string) {
     return new Date(`${dateStr}T00:00:00`);
+}
+
+export function getTaskSortTime(task: CalendarTask) {
+    return task.itemKind === 'event' ? task.startTime : task.ddl;
+}
+
+export function getTaskDisplayTime(task: CalendarTask) {
+    if (task.itemKind === 'event') {
+        const start = task.startTime || '--:--';
+        const end = task.endTime || '--:--';
+        return `${start} - ${end}`;
+    }
+    return `DDL ${task.ddl || '--:--'}`;
 }
 
 export function isValidHexColor(value: string) {

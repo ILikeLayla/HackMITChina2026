@@ -1,4 +1,4 @@
-import { parseTaskDate, type CalendarDay, type CalendarTask } from "./general_utils";
+import { getTaskSortTime, parseTaskDate, type CalendarDay, type CalendarTask } from "./general_utils";
 
 export const ADD_TYPE_OPTION_VALUE = '__add_new_type__';
 export const OTHER_TYPE = 'other';
@@ -71,20 +71,23 @@ export function filterAndSortTasks(
             }
 
             if (searchScope === 'time') {
-                return task.time.toLowerCase().includes(normalizedKeyword);
+                const timeText = task.itemKind === 'event'
+                    ? `${task.startTime} ${task.endTime}`
+                    : task.ddl;
+                return timeText.toLowerCase().includes(normalizedKeyword);
             }
 
             if (searchScope === 'type') {
                 return task.type.toLowerCase().includes(normalizedKeyword);
             }
 
-            const keywordPool = `${task.title} ${task.note} ${task.time} ${task.type}`.toLowerCase();
+            const keywordPool = `${task.title} ${task.note} ${task.ddl} ${task.startTime} ${task.endTime} ${task.type} ${task.itemKind}`.toLowerCase();
             return keywordPool.includes(normalizedKeyword);
         })
         .sort((a, b) => {
             const dateA = parseTaskDate(a.date).getTime();
             const dateB = parseTaskDate(b.date).getTime();
-            return dateA - dateB || a.time.localeCompare(b.time);
+            return dateA - dateB || getTaskSortTime(a).localeCompare(getTaskSortTime(b));
         });
 }
 

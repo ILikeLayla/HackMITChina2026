@@ -86,11 +86,55 @@ export function loadTasksFromTempDb(): CalendarTask[] {
     }
 
     try {
-        const parsed = JSON.parse(raw) as CalendarTask[];
+        const parsed = JSON.parse(raw) as Array<Partial<CalendarTask> & { time?: string }>;
         if (!Array.isArray(parsed)) {
             return seedTasks;
         }
-        return parsed;
+
+        const normalizeLegacyRange = (time?: string) => {
+            if (!time || !time.includes('-')) {
+                return { startTime: '', endTime: '' };
+            }
+
+            const [rawStart, rawEnd] = time.split('-');
+            return {
+                startTime: rawStart?.trim() ?? '',
+                endTime: rawEnd?.trim() ?? '',
+            };
+        };
+
+        return parsed
+            .filter(task => Number.isInteger(task.id))
+            .map(task => {
+                const legacyTime = typeof task.time === 'string' ? task.time : '';
+                const inferredKind = task.itemKind === 'event'
+                    ? 'event'
+                    : task.itemKind === 'task'
+                        ? 'task'
+                        : task.type === 'google' || legacyTime.includes('-')
+                            ? 'event'
+                            : 'task';
+
+                const legacyRange = normalizeLegacyRange(legacyTime);
+
+                return {
+                    id: Number(task.id),
+                    title: String(task.title ?? ''),
+                    date: String(task.date ?? ''),
+                    type: String(task.type ?? 'other'),
+                    itemKind: inferredKind,
+                    ddl: inferredKind === 'task'
+                        ? String(task.ddl ?? legacyTime)
+                        : '',
+                    startTime: inferredKind === 'event'
+                        ? String(task.startTime ?? legacyRange.startTime)
+                        : '',
+                    endTime: inferredKind === 'event'
+                        ? String(task.endTime ?? legacyRange.endTime)
+                        : '',
+                    note: String(task.note ?? ''),
+                } satisfies CalendarTask;
+            });
     } catch {
         return seedTasks;
     }

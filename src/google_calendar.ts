@@ -4,7 +4,8 @@ export interface GoogleCalendarNormalizedEvent {
     eventKey: string;
     title: string;
     date: string;
-    time: string;
+    startTime: string;
+    endTime: string;
     note: string;
 }
 
@@ -14,7 +15,10 @@ export function buildTaskFromGoogleEvent(event: GoogleCalendarNormalizedEvent, t
         title: event.title,
         date: event.date,
         type: 'google',
-        time: event.time,
+        itemKind: 'event',
+        ddl: '',
+        startTime: event.startTime,
+        endTime: event.endTime,
         note: event.note,
     };
 }

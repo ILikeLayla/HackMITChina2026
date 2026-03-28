@@ -86,30 +86,31 @@ async def send_frontend_request(prefix: str, payload: dict, timeout_seconds: flo
         calendar_query_results.pop(request_id, None)
 
 @tool
-async def create_calendar_task(title: str, date: str, taskType: str, time: str, notes: str):
+async def create_calendar_task(title: str, date: str, taskType: str, ddl: str, notes: str):
     """Creates a calendar task with the given details.
     Args:
         title: The title of the task.
         date: The date of the task in YYYY-MM-DD format.
         taskType: The type of the task (e.g., "meeting", "reminder").
-        time: The time of the task in HH:MM format.
+        ddl: The deadline time of the task in HH:MM format.
         notes: Additional notes for the task.
     Returns:
         A confirmation message about the task creation result.
     """
     logger.info(
-        "create_calendar_task called with title=%s date=%s type=%s time=%s",
+        "create_calendar_task called with title=%s date=%s type=%s ddl=%s",
         title,
         date,
         taskType,
-        time,
+        ddl,
     )
 
     task_json = json.dumps({
         "title": title,
         "date": date,
         "type": taskType,
-        "time": time,
+        "itemKind": "task",
+        "ddl": ddl,
         "note": notes
     })
     logger.info("Task payload serialized: %s", task_json)
@@ -131,9 +132,62 @@ async def create_calendar_task(title: str, date: str, taskType: str, time: str, 
         logger.warning("Timeout waiting for task creation result")
         return "Failed to create task: No response from calendar system."
 
+
+@tool
+async def create_calendar_event(
+    title: str,
+    date: str,
+    taskType: str,
+    startTime: str,
+    endTime: str,
+    notes: str,
+):
+    """Creates a calendar event with a time range.
+
+    Args:
+        title: The title of the event.
+        date: The date of the event in YYYY-MM-DD format.
+        taskType: The type/category of the event.
+        startTime: The event start time in HH:MM format.
+        endTime: The event end time in HH:MM format.
+        notes: Additional notes for the event.
+    """
+    logger.info(
+        "create_calendar_event called with title=%s date=%s type=%s start=%s end=%s",
+        title,
+        date,
+        taskType,
+        startTime,
+        endTime,
+    )
+
+    event_json = json.dumps({
+        "title": title,
+        "date": date,
+        "type": taskType,
+        "itemKind": "event",
+        "startTime": startTime,
+        "endTime": endTime,
+        "note": notes,
+    })
+
+    if active_websocket is None:
+        logger.error("No active websocket client is available for event creation")
+        return "Failed to create event: No active websocket client connection."
+
+    await active_websocket.send(f"newing_task: {event_json}")
+
+    try:
+        result_info = await asyncio.wait_for(task_creation_results.get(), timeout=50)
+        logger.info("Received event creation result successfully: %s", result_info)
+        return f"Event creation result: {result_info}"
+    except TimeoutError:
+        logger.warning("Timeout waiting for event creation result")
+        return "Failed to create event: No response from calendar system."
+
 @tool
 async def get_all_tasks():
-    """Returns lightweight task summaries (id, title, date, time, type) without notes."""
+    """Returns lightweight calendar item summaries (id, title, date, itemKind, ddl/start/end, type) without notes."""
     logger.info("get_all_tasks called")
 
     result_payload = await send_frontend_request("get_all_tasks", {}, timeout_seconds=15)
@@ -169,10 +223,13 @@ async def update_calendar_task(
     title: str = "",
     date: str = "",
     taskType: str = "",
-    time: str = "",
+    itemKind: str = "",
+    ddl: str = "",
+    startTime: str = "",
+    endTime: str = "",
     notes: str = "",
 ):
-    """Updates one calendar task by id. Empty string fields are ignored."""
+    """Updates one calendar item by id. Empty string fields are ignored."""
     logger.info("update_calendar_task called with task_id=%s", task_id)
 
     updates = {}
@@ -182,8 +239,14 @@ async def update_calendar_task(
         updates["date"] = date
     if taskType:
         updates["type"] = taskType
-    if time:
-        updates["time"] = time
+    if itemKind:
+        updates["itemKind"] = itemKind
+    if ddl:
+        updates["ddl"] = ddl
+    if startTime:
+        updates["startTime"] = startTime
+    if endTime:
+        updates["endTime"] = endTime
     if notes:
         updates["note"] = notes
 
@@ -310,6 +373,7 @@ async def get_all_task_type_colors():
 async def show_task_cards(
     task_ids: str = "",
     task_type: str = "",
+    item_kind: str = "",
     date: str = "",
     limit: int = 6,
     intro: str = "",
@@ -319,14 +383,16 @@ async def show_task_cards(
     Args:
         task_ids: Optional comma-separated task ids, e.g. "1,2,8".
         task_type: Optional task type filter.
+        item_kind: Optional item kind filter: "task" or "event".
         date: Optional date filter in YYYY-MM-DD.
         limit: Maximum number of cards to show (1-12).
         intro: Optional message shown above the cards.
     """
     logger.info(
-        "show_task_cards called with task_ids=%s task_type=%s date=%s limit=%s",
+        "show_task_cards called with task_ids=%s task_type=%s item_kind=%s date=%s limit=%s",
         task_ids,
         task_type,
+        item_kind,
         date,
         limit,
     )
@@ -336,6 +402,7 @@ async def show_task_cards(
         {
             "task_ids": task_ids,
             "task_type": task_type,
+            "item_kind": item_kind,
             "date": date,
             "limit": limit,
             "intro": intro,
@@ -362,6 +429,7 @@ task_creation_agent = create_agent(
     model,
     tools=[
         create_calendar_task,
+        create_calendar_event,
         get_all_tasks,
         get_task_by_id,
         update_calendar_task,
@@ -379,7 +447,7 @@ task_creation_agent = create_agent(
 async def calendar_agent(user_message, current_thread_id):
     logger.info("calendar_agent called with user message: %s", user_message)
 
-    system_prompt = f"You are a helpful assistant that lives in a calendar application. You will answer user questions related to their calendar and create calendar tasks based on user requests. When creating tasks, create new tasks type with appropriate color when neccessary. When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks)."
+    system_prompt = f"You are a helpful assistant that lives in a calendar application. You support two kinds of calendar items: task (with DDL) and event (with a start and end time). Use create_calendar_task for tasks and create_calendar_event for events. When creating items, create new item types with appropriate color when necessary. When deleting tasks, check if the task type associated with the task can be deleted (if it is not being used by any other tasks)."
 
     initial_messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
     logger.info("Invoking calendar agent")

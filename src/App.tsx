@@ -395,7 +395,10 @@ function MainCalendar() {
                         id: task.id,
                         title: task.title,
                         date: task.date,
-                        time: task.time,
+                        itemKind: task.itemKind,
+                        ddl: task.ddl,
+                        startTime: task.startTime,
+                        endTime: task.endTime,
                         type: task.type,
                         note: task.note,
                     },
@@ -906,7 +909,10 @@ function MainCalendar() {
         setModalDraft({
             title: task.title,
             type: task.type,
-            time: task.time,
+            itemKind: task.itemKind,
+            ddl: task.ddl,
+            startTime: task.startTime,
+            endTime: task.endTime,
             note: task.note,
         });
     };
@@ -916,7 +922,10 @@ function MainCalendar() {
             id: preview.id,
             title: preview.title,
             date: preview.date,
-            time: preview.time,
+            itemKind: preview.itemKind,
+            ddl: preview.ddl,
+            startTime: preview.startTime,
+            endTime: preview.endTime,
             type: preview.type,
             note: preview.note,
         });
@@ -933,7 +942,10 @@ function MainCalendar() {
         setModalDraft({
             title: '',
             type: defaultType,
-            time: '09:00',
+            itemKind: 'task',
+            ddl: '09:00',
+            startTime: '09:00',
+            endTime: '10:00',
             note: '',
         });
     };
@@ -1227,25 +1239,31 @@ function MainCalendar() {
                 id: nextTaskId,
                 title: modalDraft.title.trim(),
                 type: modalDraft.type,
-                time: modalDraft.time,
+                itemKind: modalDraft.itemKind,
+                ddl: modalDraft.itemKind === 'task' ? modalDraft.ddl : '',
+                startTime: modalDraft.itemKind === 'event' ? modalDraft.startTime : '',
+                endTime: modalDraft.itemKind === 'event' ? modalDraft.endTime : '',
                 note: modalDraft.note,
                 date: buildDateString(dateForNewTask),
             };
             setTasks(prev => [...prev, newTask]);
-            enqueueSnackbar('Task created.', { variant: 'success' });
+            enqueueSnackbar('Item created.', { variant: 'success' });
         } else if (selectedTask) {
             setTasks(prev => prev.map(task => (
                 task.id === selectedTask.id
                     ? {
                         ...task,
                         title: modalDraft.title.trim(),
-                        time: modalDraft.time,
+                        itemKind: modalDraft.itemKind,
+                        ddl: modalDraft.itemKind === 'task' ? modalDraft.ddl : '',
+                        startTime: modalDraft.itemKind === 'event' ? modalDraft.startTime : '',
+                        endTime: modalDraft.itemKind === 'event' ? modalDraft.endTime : '',
                         note: modalDraft.note,
                         type: modalDraft.type,
                     }
                     : task
             )));
-            enqueueSnackbar('Task updated.', { variant: 'success' });
+            enqueueSnackbar('Item updated.', { variant: 'success' });
         }
 
         closeTaskModal();
@@ -1258,7 +1276,7 @@ function MainCalendar() {
 
         setTasks(prev => prev.filter(task => task.id !== selectedTask.id));
         closeTaskModal();
-        enqueueSnackbar('Task deleted.', { variant: 'error' });
+        enqueueSnackbar('Item deleted.', { variant: 'error' });
     };
 
     const handleDayClick = (day: CalendarDay) => {
@@ -1474,7 +1492,7 @@ function MainCalendar() {
         : effectiveViewMode === 'day'
             ? getDayTitle(displayDate)
             : effectiveViewMode === 'list'
-                ? 'Task List'
+                ? 'Item List'
                 : `${displayDate.toLocaleString('default', { month: 'long' })} ${displayDate.getFullYear()}`;
     const filtersButtonText = isHeaderToolsOpen ? 'hide filters' : 'filters';
     const activeAiThread = aiThreads.find(thread => thread.id === activeAiThreadId) ?? aiThreads[0] ?? null;

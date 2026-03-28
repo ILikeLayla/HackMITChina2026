@@ -268,7 +268,16 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                 }));
             }
 
-            const time = taskInfo.time || '';
+            const itemKind: CalendarTask['itemKind'] = taskInfo.itemKind === 'event' ? 'event' : 'task';
+            const ddl = itemKind === 'task'
+                ? String(taskInfo.ddl ?? taskInfo.time ?? '')
+                : '';
+            const startTime = itemKind === 'event'
+                ? String(taskInfo.startTime ?? '')
+                : '';
+            const endTime = itemKind === 'event'
+                ? String(taskInfo.endTime ?? '')
+                : '';
             const note = taskInfo.note || '';
             const computedTaskId = nextTaskIdRef.current;
             nextTaskIdRef.current = computedTaskId + 1;
@@ -276,7 +285,10 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                 id: computedTaskId,
                 title,
                 type,
-                time,
+                itemKind,
+                ddl,
+                startTime,
+                endTime,
                 note,
                 date: buildDateString(date),
             };
@@ -331,7 +343,10 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     id: task.id,
                     title: task.title,
                     date: task.date,
-                    time: task.time,
+                    itemKind: task.itemKind,
+                    ddl: task.ddl,
+                    startTime: task.startTime,
+                    endTime: task.endTime,
                     type: task.type,
                 }));
 
@@ -403,10 +418,22 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
 
                 const updatedTask: CalendarTask = {
                     ...existingTask,
+                    ...(payload.updates?.itemKind !== undefined
+                        ? { itemKind: payload.updates.itemKind === 'event' ? 'event' : 'task' }
+                        : {}),
                     ...(payload.updates?.title !== undefined ? { title: String(payload.updates.title) } : {}),
                     ...(payload.updates?.date !== undefined ? { date: String(payload.updates.date) } : {}),
                     ...(payload.updates?.type !== undefined ? { type: String(payload.updates.type) } : {}),
-                    ...(payload.updates?.time !== undefined ? { time: String(payload.updates.time) } : {}),
+                    ...(payload.updates?.ddl !== undefined ? { ddl: String(payload.updates.ddl) } : {}),
+                    ...(payload.updates?.startTime !== undefined ? { startTime: String(payload.updates.startTime) } : {}),
+                    ...(payload.updates?.endTime !== undefined ? { endTime: String(payload.updates.endTime) } : {}),
+                    ...(payload.updates && 'time' in payload.updates && (payload.updates as { time?: unknown }).time !== undefined
+                        ? (
+                            existingTask.itemKind === 'event'
+                                ? { startTime: String((payload.updates as { time?: unknown }).time) }
+                                : { ddl: String((payload.updates as { time?: unknown }).time) }
+                        )
+                        : {}),
                     ...(payload.updates?.note !== undefined ? { note: String(payload.updates.note) } : {}),
                 };
 
@@ -720,6 +747,7 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     request_id?: string;
                     task_ids?: Array<number | string> | string;
                     task_type?: string;
+                    item_kind?: string;
                     date?: string;
                     limit?: number;
                     intro?: string;
@@ -751,6 +779,11 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     candidates = candidates.filter(task => task.type === typeFilter);
                 }
 
+                const kindFilter = (payload.item_kind ?? '').trim().toLowerCase();
+                if (kindFilter === 'task' || kindFilter === 'event') {
+                    candidates = candidates.filter(task => task.itemKind === kindFilter);
+                }
+
                 const dateFilter = (payload.date ?? '').trim();
                 if (dateFilter) {
                     candidates = candidates.filter(task => task.date === dateFilter);
@@ -763,7 +796,10 @@ export function connectWebSocketGateway(params: WebSocketGatewayParams) {
                     id: task.id,
                     title: task.title,
                     date: task.date,
-                    time: task.time,
+                    itemKind: task.itemKind,
+                    ddl: task.ddl,
+                    startTime: task.startTime,
+                    endTime: task.endTime,
                     type: task.type,
                     note: task.note,
                 }));

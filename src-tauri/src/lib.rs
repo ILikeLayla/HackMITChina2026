@@ -64,6 +64,7 @@ struct GoogleCalendarEvent {
     description: Option<String>,
     location: Option<String>,
     start: Option<GoogleCalendarEventStart>,
+    end: Option<GoogleCalendarEventStart>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -79,7 +80,8 @@ struct GoogleCalendarNormalizedEvent {
     event_key: String,
     title: String,
     date: String,
-    time: String,
+    start_time: String,
+    end_time: String,
     note: String,
 }
 
@@ -243,13 +245,23 @@ async fn fetch_google_events_for_calendar(
                 None => continue,
             };
 
-            let (date, time) = match event.start.as_ref() {
+            let (date, start_time, end_time) = match event.start.as_ref() {
                 Some(start) => {
                     if let Some(all_day) = start.date.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty()) {
-                        (all_day.to_string(), "00:00".to_string())
+                        (all_day.to_string(), "00:00".to_string(), "23:59".to_string())
                     } else if let Some(date_time) = start.date_time.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty()) {
-                        parse_date_time_to_local(date_time)
-                            .unwrap_or_else(|| (date_time.chars().take(10).collect::<String>(), "00:00".to_string()))
+                        let (local_date, local_start) = parse_date_time_to_local(date_time)
+                            .unwrap_or_else(|| (date_time.chars().take(10).collect::<String>(), "00:00".to_string()));
+
+                        let local_end = event
+                            .end
+                            .as_ref()
+                            .and_then(|end| end.date_time.as_ref())
+                            .and_then(|value| parse_date_time_to_local(value.trim()))
+                            .map(|(_, time)| time)
+                            .unwrap_or_else(|| "23:59".to_string());
+
+                        (local_date, local_start, local_end)
                     } else {
                         continue;
                     }
@@ -267,7 +279,8 @@ async fn fetch_google_events_for_calendar(
                     .unwrap_or("(No title)")
                     .to_string(),
                 date,
-                time,
+                start_time,
+                end_time,
                 note: build_event_note(&event, calendar_name),
             });
         }
