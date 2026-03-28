@@ -419,6 +419,7 @@
 @media (prefers-color-scheme: dark) {
   .weekdays {
     background: #444;
+    border-bottom: 1px solid #555;
   }
 
   .weekday {
@@ -428,6 +429,7 @@
 
   .days {
     background: #444;
+    border: 1px solid #555;
   }
 
   .day {
